@@ -48,7 +48,28 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     RES_DIR = BASE_DIR
-CONFIG_PATH = os.path.join(BASE_DIR, "opencode2trae-config.json")
+
+
+def _can_write(folder: str) -> bool:
+    """试一下这个文件夹能不能写东西。
+    写不了就别硬塞（比如 exe 放在 C 盘根目录，系统不让写），换个别的地方。"""
+    probe = os.path.join(folder, ".o2t-write-test")
+    try:
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+CONFIG_NAME = "opencode2trae-config.json"
+# 首选：放在程序旁边（绿色软件，方便找）
+CONFIG_BESIDE = os.path.join(BASE_DIR, CONFIG_NAME)
+# 备选：程序旁边写不了就放这儿（用户自己的目录，一定有写权限）
+CONFIG_USERDIR = os.path.join(
+    os.environ.get("APPDATA") or os.path.expanduser("~"), "OpenCode2Trae", CONFIG_NAME)
+CONFIG_PATH = CONFIG_BESIDE if _can_write(BASE_DIR) else CONFIG_USERDIR
 ICON_PATH = os.path.join(RES_DIR, "OpenCode2Trae.ico")
 ICON_PNG = os.path.join(RES_DIR, "icon.png")
 
@@ -597,7 +618,8 @@ class BridgeApp:
 
         ttk.Label(key_box, style="Hint.TLabel",
                   text="粘贴进来点保存，下次打开自动带出，方便随时复制。\n"
-                       "（密钥在本机明文存着，只存在本程序旁边的配置文件里）"
+                       "（密钥在本机明文存着，只存在你自己电脑的配置文件里：一般就放在程序旁边；\n"
+                       "如果程序放在 C 盘根目录这种写不进去的地方，会改放到用户目录下）"
                   ).pack(anchor="w", pady=(6, 0))
 
         oa = ttk.Labelframe(tab, text=" ① OpenAI 格式（GPT / Gemini / Grok / DeepSeek / Qwen / Kimi…） ",
@@ -959,11 +981,22 @@ class BridgeApp:
             pass
         self.root.after(200, self._pump_log)
 
+    def _config_paths(self):
+        """配置可能放的位置，按优先级排（去重）。"""
+        return list(dict.fromkeys((CONFIG_PATH, CONFIG_BESIDE, CONFIG_USERDIR)))
+
     def _load_config(self):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except Exception:
+        data = None
+        for path in self._config_paths():
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+            except Exception:
+                continue
+            if isinstance(loaded, dict):
+                data = loaded
+                break
+        if data is None:
             return
         if isinstance(data.get("api_key"), str):
             self.key_var.set(data["api_key"])
@@ -973,11 +1006,18 @@ class BridgeApp:
 
     def _save_config(self):
         data = {"api_key": self.key_var.get().strip(), "port": self._port() or DEFAULT_PORT}
-        try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-        except Exception as exc:
-            self._log_line(f"配置没保存成功：{exc}")
+        err = None
+        for path in self._config_paths():
+            try:
+                folder = os.path.dirname(path)
+                if folder:
+                    os.makedirs(folder, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, ensure_ascii=False, indent=2)
+                return
+            except Exception as exc:
+                err = exc          # 这个位置写不了，换下一个
+        self._log_line(f"配置没保存成功：{err}")
 
     def _on_close(self):
         if self.server is not None:
@@ -1015,7 +1055,8 @@ HELP_TEXT = """OpenCode2Trae 是一个"中转站"程序，专门解决 Trae 连 
 
 要注意的事
     · 本程序必须一直开着。关掉窗口 = 断线。
-    · 它是本机自用的中转站，不联网存储你的数据，密钥只写在本程序旁边的配置文件里。
+    · 它是本机自用的中转站，不联网存储你的数据，密钥只写在你电脑的配置文件里
+      （一般放在程序旁边；程序放在 C 盘根目录这种写不进去的地方时，会自动改放到用户目录）。
     · 如果某个模型报「不支持图片输入」，去高级配置把「支持图片输入」关掉。
     · 如果报 401 之类的鉴权错误，那是密钥的问题，不是桥接坏了。
 """
