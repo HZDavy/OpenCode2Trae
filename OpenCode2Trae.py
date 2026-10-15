@@ -102,12 +102,33 @@ SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.6，这里就写 2.1.6）
+APP_VERSION = "2.1.6"
+# "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
+UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
+RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
 
 APP_NAME = "OpenCode2Trae"
 # 开机启动项写在注册表这个位置（HKEY_CURRENT_USER 下面，只影响当前登录的用户）
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _is_newer(candidate: str, current: str) -> bool:
+    """候选版本是不是比当前版本新？（比如 2.1.6 比 2.1.5 新）
+
+    版本号长这样：2.1.5，点分开的三段数字，一段一段比，谁大谁新 ——
+    跟比大小一样，先比第一段，一样就比第二段，再一样比第三段。
+    万一某段不是数字（比如 2.1.5-beta 里的 beta），就当它是 0，不影响比较。
+    """
+    def nums(text):
+        return [int(m.group(0)) for m in re.finditer(r"\d+", text or "")]
+    a, b = nums(candidate), nums(current)
+    n = max(len(a), len(b), 1)
+    a += [0] * (n - len(a))
+    b += [0] * (n - len(b))
+    return a > b
 
 
 def _launch_command(tray_flag: bool) -> str:
@@ -587,6 +608,14 @@ class BridgeApp:
         self._overlay_bind = None      # 上面那层"纱"跟主窗口联动的绑定 id
         self._frame_off = None         # 窗口外框偏移（见 _frame_offset），量一次就记住
         self.win_geom = None           # 上次记住的窗口位置和大小，形如 "1100x800+320+180"
+
+        # ---- "检查更新"用到的小物件 ----
+        self.update_label = None       # 设置窗里显示"正在检查 / 已是最新 / 发现新版本"的那行字
+        self.update_btn = None         # "检查更新"按钮（发现新版本后会变成"去下载"）
+        self.update_url = None         # 发现新版本时，要跳转的下载页地址
+        self._updating = False         # 是不是正在检查（防止连点）
+        self.upd_q = queue.Queue()     # 后台线程查到的结果先丢这儿，由主线程来取
+                                       # （Tk 的界面不能跨线程改，只能"递纸条"）
 
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
         self.key_var = tk.StringVar()
@@ -1313,15 +1342,26 @@ class BridgeApp:
 
     # ---------- 设置窗口 ----------
     def _open_settings(self):
-        """打开"设置"小窗口（里面就是两个开关）。"""
+        """打开"设置"小窗口（里面是两个开关 + 版本号 / 检查更新）。"""
         s = self.ui_scale
         if self.settings_win is not None and self.settings_win.winfo_exists():
+            self._set_topmost(True)     # 重新把三扇窗钉在一起
             self.settings_win.deiconify()
+            try:
+                self.settings_win.attributes("-topmost", True)
+            except Exception:
+                pass
             self.settings_win.lift()
             self.settings_win.focus_force()
             return
 
-        self._show_overlay()          # 先给主窗口盖一层"黑色半透明纱"
+        # 关键一步：主窗口自己也要"钉"在最上层。
+        # 为什么？原来只把"纱"和设置窗钉住、主窗口没钉 —— 别的程序窗口
+        # （浏览器、聊天软件…）就会排到主窗口上面，正好卡在"纱"和主窗口中间，
+        # 看着就像被人插了一刀。三扇窗一起钉，就抱成一堵整墙，谁也插不进来。
+        # 顺序很重要：先钉主窗口，再盖"纱"（纱压在主窗口上），最后弹设置窗（最上面）。
+        self._set_topmost(True)
+        self._show_overlay()          # 再给主窗口盖一层"黑色半透明纱"
         win = tk.Toplevel(self.root)
         win.withdraw()                # 先藏起来：等位置算好了再露脸，不然会先闪一下
         self.settings_win = win
@@ -1373,6 +1413,28 @@ class BridgeApp:
                      wraplength=int(round(320 * s))).pack(
                 anchor="w", pady=(0, int(round(10 * s))))
 
+        # ---- 版本 + 检查更新 ----
+        # 每次打开设置都重置一下：上一次可能显示着"发现新版本 v2.1.6"，
+        # 重开一次不该还粘着旧结果。
+        self.update_url = None
+        ver_row = tk.Frame(box, bg=BG)
+        ver_row.pack(fill="x")
+        tk.Label(ver_row, text="版本", bg=BG, fg=TEXT,
+                 font=(FONT, 10, "bold")).pack(side="left")
+        tk.Label(ver_row, text=f"v{APP_VERSION}", bg=BG, fg=MUTED,
+                 font=(MONO, 10)).pack(side="left", padx=(int(round(8 * s)), 0))
+        self.update_btn = ttk.Button(ver_row, text="检查更新", style="TButton",
+                                     command=self._on_update_click)
+        self.update_btn.pack(side="right")
+        self.update_label = tk.Label(
+            box, text="点右边的「检查更新」，看看有没有新版本。", bg=BG, fg=MUTED,
+            font=(FONT, 9), justify="left", wraplength=int(round(320 * s)))
+        self.update_label.pack(anchor="w", pady=(int(round(6 * s)), int(round(2 * s))))
+        if self._updating:
+            # 上一次的检查还没回来（设置关掉又打开了），接着显示"正在检查"
+            self._set_update_text("正在检查更新…", MUTED)
+            self._set_update_btn_enabled(False)
+
         tk.Frame(box, bg=BORDER, height=max(1, int(round(1 * s)))).pack(
             fill="x", pady=(int(round(4 * s)), int(round(12 * s))))
         # 底下这一行：左边是"去官网看看"的入口，右边是关闭设置的"完成"
@@ -1400,18 +1462,142 @@ class BridgeApp:
         win.geometry(f"{w}x{h}+{x}+{y}")
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
         win.deiconify()               # 位置算好了，这才露脸
-        win.lift()
         try:
-            # 设置窗也得置顶，才会落在"纱"上面（不然会被纱糊住看不清）。
-            # 主窗口本身不置顶，所以设置窗置顶不会影响主窗口。
+            # 设置窗也要钉在最上层，才会稳稳落在"纱"上面、也在主窗口上面。
+            # 三扇窗都在最上层时，谁后钉谁就在最上面：主窗口 → 纱 → 设置窗，
+            # 一层压一层，中间不留缝，别的程序也就插不进来了。
             win.attributes("-topmost", True)
         except Exception:
             pass
+        win.lift()
         try:
             win.grab_set()            # 打开设置时"锁住"主窗口：点它没反应，只能先关设置
         except Exception:
             pass
         win.focus_force()
+
+    def _set_topmost(self, on: bool):
+        """把主窗口"钉"在最上层（on=True）或者松开（on=False）。
+
+        打个比方：普通窗口像桌上的纸，谁刚被拿起来谁就在上面；
+        钉在最上层的窗口像贴在墙上的告示，不管你怎么翻桌上的纸，它都在最外面。
+        设置窗打开期间，主窗口 + "纱" + 设置窗是一整套，必须一起贴墙上，
+        不然别的程序窗口会从中间挤进来。设置一关就立刻松绑，恢复正常。
+        """
+        try:
+            self.root.attributes("-topmost", bool(on))
+        except Exception:
+            pass
+
+    # ---------- 版本 / 检查更新 ----------
+    def _set_update_text(self, text, color):
+        """改那句提示文字（顺手兜一下：窗口可能已经被关掉了）。"""
+        lbl = self.update_label
+        try:
+            if lbl is not None and lbl.winfo_exists():
+                lbl.configure(text=text, fg=color)
+        except Exception:
+            pass
+
+    def _set_update_btn_enabled(self, enabled):
+        btn = self.update_btn
+        try:
+            if btn is not None and btn.winfo_exists():
+                btn.state(["!disabled"] if enabled else ["disabled"])
+        except Exception:
+            pass
+
+    def _on_update_click(self):
+        """同一个按钮，两种身份：
+        平时是「检查更新」；一旦查到新版本，就变成「去下载」，再点就打开下载页。
+        """
+        if self.update_url:
+            url = self.update_url
+            self.update_url = None
+            try:
+                if self.update_btn is not None and self.update_btn.winfo_exists():
+                    self.update_btn.configure(text="检查更新")
+            except Exception:
+                pass
+            self.open_url(url)
+            return
+        self._check_update()
+
+    def _check_update(self):
+        """查一下有没有新版本。联网这事慢，所以丢给后台线程做，界面不会卡住。"""
+        if self._updating:
+            return
+        self._updating = True
+        self._set_update_text("正在检查更新…", MUTED)
+        self._set_update_btn_enabled(False)
+        threading.Thread(target=self._update_worker, daemon=True).start()
+        self.root.after(200, self._pump_update)
+
+    def _update_worker(self):
+        """后台线程：去 GitHub 问一句"最新版本是哪个"。
+
+        注意：Tk 的界面不能从这个线程直接改（会崩），所以这里只把结果
+        丢进队列，由主线程的 _pump_update 取出来再改界面。
+        就像后厨做好菜先放窗口，由服务员端出去，不让后厨自己跑进大厅。
+        """
+        try:
+            req = urllib.request.Request(
+                UPDATE_API,
+                headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}",
+                         "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+            tag = str(data.get("tag_name") or "").strip()
+            url = str(data.get("html_url") or RELEASES_URL)
+            latest = tag.lstrip("vV")
+            if not latest:
+                self.upd_q.put(("error", "GitHub 没给出版本号", None))
+            elif _is_newer(latest, APP_VERSION):
+                self.upd_q.put(("new", latest, url))
+            else:
+                self.upd_q.put(("latest", latest, url))
+        except Exception as exc:
+            self.upd_q.put(("error", self._short_err(exc), None))
+
+    @staticmethod
+    def _short_err(exc) -> str:
+        """把一长串报错压成一句人话（给不熟悉电脑的人看的）。"""
+        text = str(exc)
+        low = text.lower()
+        if "timed out" in low or "timeout" in low:
+            return "网络太慢或没连上（超时了），过会儿再试"
+        if "getaddrinfo" in low or "unreachable" in low or "connection" in low:
+            return "连不上网，或者 GitHub 被挡住了"
+        if "403" in text or "429" in text:
+            return "问得太勤了，过一会儿再试"
+        return (text[:80] or "未知错误")
+
+    def _pump_update(self):
+        """主线程：定时看看后台线程有没有递结果过来，有就更新界面。"""
+        got = False
+        try:
+            while True:
+                kind, ver, url = self.upd_q.get_nowait()
+                got = True
+                self._updating = False
+                self._set_update_btn_enabled(True)
+                if kind == "new":
+                    self.update_url = url or RELEASES_URL
+                    self._set_update_text(
+                        f"发现新版本 v{ver}（当前是 v{APP_VERSION}），点「去下载」", ORANGE)
+                    try:
+                        if self.update_btn is not None and self.update_btn.winfo_exists():
+                            self.update_btn.configure(text="去下载")
+                    except Exception:
+                        pass
+                elif kind == "latest":
+                    self._set_update_text(f"已是最新版本（v{APP_VERSION}）", GREEN)
+                else:
+                    self._set_update_text(f"检查失败：{ver}", ORANGE)
+        except queue.Empty:
+            pass
+        if self._updating and not got:
+            self.root.after(200, self._pump_update)
 
     def _frame_offset(self):
         """量一下"窗口外框"比"看得见的内容区"往左上多出多少（多了边框 + 标题栏）。
@@ -1513,7 +1699,11 @@ class BridgeApp:
                 pass
             self.settings_win.destroy()
         self.settings_win = None
+        self.update_label = None       # 窗口没了，这几个引用也一并清掉
+        self.update_btn = None
+        self.update_url = None
         self._hide_overlay()
+        self._set_topmost(False)       # 松绑：主窗口恢复成普通窗口
 
     def _on_toggle_tray(self):
         want = bool(self.tray_var.get())
