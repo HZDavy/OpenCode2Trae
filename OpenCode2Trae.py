@@ -55,9 +55,10 @@ ICON_PNG = os.path.join(RES_DIR, "icon.png")
 UPSTREAM_HOST = "opencode.ai"
 UPSTREAM_PREFIX = "/inference/go"
 BRIDGE_ID = "opencode2trae"
-BRIDGE_VERSION = "2.0"
+BRIDGE_VERSION = "2.1"
 SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
+USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
 
@@ -102,6 +103,133 @@ MODELS = [
     ("Hy3", "hy3"),
     ("Space Bunny", "space-bunny"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# 厂商徽章（品牌色 + 首字母）
+# ---------------------------------------------------------------------------
+# 说明：真正的厂商 logo 是各家公司的版权图，不能直接塞进程序里，所以这里用
+# "品牌色圆角小方块 + 首字母"来表示是哪一家，效果和 logo 一样好认。
+VENDORS = {
+    "Anthropic":    ("A", "#D97757"),   # Claude
+    "xAI":          ("X", "#1A1A1A"),   # Grok
+    "智谱 AI":       ("Z", "#3859FF"),   # GLM
+    "OpenAI":       ("O", "#10A37F"),   # GPT
+    "Google":       ("G", "#4285F4"),   # Gemini
+    "Moonshot":     ("K", "#2C2C2C"),   # Kimi
+    "美团":          ("L", "#F5C518"),   # LongCat
+    "阶跃星辰":       ("S", "#0A66FF"),   # Step
+    "Cat Jam":      ("C", "#FF6B9D"),
+    "小米":          ("M", "#FF6900"),   # MiMo
+    "MiniMax":      ("M", "#E7354A"),
+    "Muse":         ("M", "#7C3AED"),   # Muse Spark
+    "阿里通义":       ("Q", "#615CED"),   # Qwen
+    "DeepSeek":     ("D", "#4D6BFE"),
+    "腾讯混元":       ("H", "#0052D9"),   # Hunyuan
+    "Space Bunny":  ("B", "#FF4D8D"),
+}
+
+# 5x7 的点阵字模（# = 点亮），用来在徽章里画字母
+_FONT5x7 = {
+    "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+    "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+    "C": [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+    "D": ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
+    "G": [".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".###."],
+    "H": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+    "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+    "L": ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
+    "M": ["#...#", "##.##", "#.#.#", "#...#", "#...#", "#...#", "#...#"],
+    "O": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+    "Q": [".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"],
+    "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+    "X": ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+    "Z": ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+}
+
+
+def make_badge(letter: str, color: str, size: int = 20) -> tk.PhotoImage:
+    """画一个"品牌色圆角方块 + 白字母"的小徽章（跟 logo 一个作用，好认）。"""
+    img = tk.PhotoImage(width=size, height=size)
+    radius = 4
+    for x in range(size):
+        for y in range(size):
+            near_x, near_y = min(x, size - 1 - x), min(y, size - 1 - y)
+            if near_x < radius and near_y < radius:
+                dx, dy = radius - near_x - 0.5, radius - near_y - 0.5
+                if dx * dx + dy * dy > (radius - 0.5) ** 2:
+                    continue          # 圆角外面，留透明
+            img.put(color, to=(x, y, x + 1, y + 1))
+    rows = _FONT5x7.get((letter or "?").upper())
+    if rows:
+        scale = 2
+        ox = (size - 5 * scale) // 2
+        oy = (size - 7 * scale) // 2
+        for r, row in enumerate(rows):
+            for c, ch in enumerate(row):
+                if ch == "#":
+                    px, py = ox + c * scale, oy + r * scale
+                    img.put("#ffffff", to=(px, py, px + scale, py + scale))
+    return img
+
+
+# ---------------------------------------------------------------------------
+# 每个模型的官方信息（数据来自 https://opencode.ai/docs/go/ 的 Go 套餐用量表）
+#   格式：模型 ID -> (厂商, 输入 $/百万字, 输出 $/百万字, 每月额度 $)
+#   价格写 None = 官方没公布；写 0 = 免费；额度写 None = 不限额
+# ---------------------------------------------------------------------------
+MODEL_INFO = {
+    "claude-haiku-5-5":           ("Anthropic",  0.10,  0.50,  15),
+    "grok-4.7":                   ("xAI",        2.00,  6.00,  15),
+    "grok-4.6":                   ("xAI",        2.00,  6.00,  15),
+    "glm-5.3-flash":              ("智谱 AI",     0.15,  0.50,  60),
+    "glm-5.3":                    ("智谱 AI",     1.40,  4.40,  15),
+    "glm-5.2":                    ("智谱 AI",     1.40,  4.40,  60),
+    "gpt-6-luna":                 ("OpenAI",     0.10,  0.50,  15),
+    "gpt-5.6-luna":               ("OpenAI",     0.20,  1.20,  15),
+    "gemini-4-argon-contributor": ("Google",     None,  None,  None),
+    "kimi-k3":                    ("Moonshot",   3.00, 15.00,  15),
+    "kimi-k2.7-code":             ("Moonshot",   0.95,  4.00,  60),
+    "kimi-k2.6":                  ("Moonshot",   0.95,  4.00,  60),
+    "longcat-2.0":                ("美团",        0.30,  1.20,  60),
+    "longcat-2.5-preview-free":   ("美团",        0.00,  0.00,  0),
+    "step-5-preview-free":        ("阶跃星辰",     0.00,  0.00,  0),
+    "cat-jam-free":               ("Cat Jam",    0.00,  0.00,  0),
+    "mimo-v2.6-flash":            ("小米",        0.14,  0.28,  60),
+    "mimo-v2.6-pro":              ("小米",        0.435, 0.87,  15),
+    "mimo-v2.5":                  ("小米",        0.14,  0.28,  60),
+    "mimo-v2.5-pro":              ("小米",        0.435, 0.87,  15),
+    "minimax-m3":                 ("MiniMax",    0.30,  1.20,  60),
+    "minimax-m2.7":               ("MiniMax",    0.30,  1.20,  60),
+    "muse-spark-1.3-contributor": ("Muse",       0.10,  0.20,  60),
+    "muse-spark-1.2-contributor": ("Muse",       0.10,  0.20,  60),
+    "qwen3.8-max":                ("阿里通义",     2.00,  6.00,  15),
+    "qwen3.8-flash":              ("阿里通义",     0.15,  0.47,  30),
+    "qwen3.7-plus":               ("阿里通义",     0.40,  1.60,  60),
+    "deepseek-v4.1-flash":        ("DeepSeek",   0.15,  0.60,  60),
+    "deepseek-v4-pro":            ("DeepSeek",   0.66,  1.98,  15),
+    "hy4-preview":                ("腾讯混元",     0.834, 2.501, 30),
+    "hy3":                        ("腾讯混元",     0.14,  0.58,  60),
+    "space-bunny":                ("Space Bunny", 0.15,  0.60,  30),
+}
+
+
+def money_text(value) -> str:
+    """把价格变成好看的字符串。"""
+    if value is None:
+        return "—"
+    if value == 0:
+        return "免费"
+    return "$" + (f"{value:.4f}".rstrip("0").rstrip("."))
+
+
+def quota_text(value) -> str:
+    """把"每月额度"变成好看的字符串。"""
+    if value is None:
+        return "—"
+    if value == 0:
+        return "免费不限量"
+    return f"${value:.0f}"
 
 
 def models_payload() -> dict:
@@ -345,6 +473,9 @@ class BridgeApp:
         self.server = None
         self.external = False          # 端口上是不是已经有别的桥接在跑
         self.key_shown = False
+        self.badges = {}               # 厂商徽章图片（缓存起来，不然会被回收掉）
+        self.sort_mode = "cap"         # cap = 能力排序，price = 价格排序
+        self.sort_desc = False         # 是不是"反过来排"
 
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
         self.key_var = tk.StringVar()
@@ -356,6 +487,7 @@ class BridgeApp:
         self.addr_claude_base = tk.StringVar()
         self.addr_claude_full = tk.StringVar()
         self.search_var = tk.StringVar()
+        self.sort_var = tk.StringVar()
 
         self._setup_style()
         self._build()
@@ -460,6 +592,8 @@ class BridgeApp:
                    command=lambda: self.open_url(SITE_URL)).pack(side="left")
         ttk.Button(links, text="打开 API 密钥管理页",
                    command=lambda: self.open_url(CONSOLE_URL)).pack(side="left", padx=6)
+        ttk.Button(links, text="打开用量监控页",
+                   command=lambda: self.open_url(USAGE_URL)).pack(side="left")
 
         ttk.Label(key_box, style="Hint.TLabel",
                   text="粘贴进来点保存，下次打开自动带出，方便随时复制。\n"
@@ -500,62 +634,141 @@ class BridgeApp:
         nb.add(tab, text="模型清单")
 
         top = ttk.Frame(tab)
-        top.pack(fill="x", pady=(0, 8))
+        top.pack(fill="x", pady=(0, 6))
         ttk.Label(top, text="搜索").pack(side="left")
-        ttk.Entry(top, textvariable=self.search_var, width=22).pack(side="left", padx=(4, 14))
+        ttk.Entry(top, textvariable=self.search_var, width=20).pack(side="left", padx=(4, 14))
         ttk.Button(top, text="复制模型 ID",
-                   command=lambda: self._copy_row(1)).pack(side="left")
+                   command=self._copy_id).pack(side="left")
         ttk.Button(top, text="复制模型名称",
-                   command=lambda: self._copy_row(0)).pack(side="left", padx=4)
+                   command=self._copy_name).pack(side="left", padx=4)
         ttk.Button(top, text="复制「名称 + ID」两行",
                    command=self._copy_both).pack(side="left")
         ttk.Label(top, style="Hint.TLabel",
                   text=f"共 {len(MODELS)} 个").pack(side="right")
 
+        srt = ttk.Frame(tab)
+        srt.pack(fill="x", pady=(0, 8))
+        ttk.Label(srt, text="排序").pack(side="left")
+        ttk.Button(srt, text="按模型能力排序",
+                   command=lambda: self._set_sort("cap")).pack(side="left", padx=(4, 4))
+        ttk.Button(srt, text="按价格排序",
+                   command=lambda: self._set_sort("price")).pack(side="left")
+        ttk.Label(srt, textvariable=self.sort_var,
+                  style="Hint.TLabel").pack(side="left", padx=10)
+
         wrap = ttk.Frame(tab)
         wrap.pack(fill="both", expand=True)
-        cols = ("name", "id")
-        self.tree = ttk.Treeview(wrap, columns=cols, show="headings")
-        self.tree.heading("name", text="模型名称（Trae 里「模型展示名称」随便写，这里给你参考）")
+        cols = ("vendor", "id", "inp", "outp", "quota")
+        self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings")
+        self.tree.heading("#0", text="模型名称（Trae 里名字随便写）")
+        self.tree.column("#0", width=215, anchor="w")
+        self.tree.heading("vendor", text="厂商")
+        self.tree.column("vendor", width=88, anchor="w")
         self.tree.heading("id", text="模型 ID（必须照抄这个）")
-        self.tree.column("name", width=300, anchor="w")
-        self.tree.column("id", width=360, anchor="w")
+        self.tree.column("id", width=235, anchor="w")
+        self.tree.heading("inp", text="输入 $/百万字")
+        self.tree.column("inp", width=98, anchor="e")
+        self.tree.heading("outp", text="输出 $/百万字")
+        self.tree.column("outp", width=98, anchor="e")
+        self.tree.heading("quota", text="每月额度（官方给的 $）")
+        self.tree.column("quota", width=140, anchor="e")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="left", fill="y")
-        self.tree.bind("<Double-1>", lambda _e: self._copy_row(1))
+        self.tree.bind("<Double-1>", lambda _e: self._copy_id())
         self._fill_tree()
+        self._update_sort_label()
 
+        total = sum(v[3] for v in MODEL_INFO.values()
+                    if isinstance(v[3], (int, float)) and v[3] > 0)
+        no_price = sum(1 for _, mid in MODELS
+                       if MODEL_INFO.get(mid, (0, None, None, None))[1] is None)
+        extra = f"；有 {no_price} 个官方还没公布价格" if no_price else ""
         ttk.Label(tab, style="Hint.TLabel",
-                  text="小提示：双击某一行 = 复制它的模型 ID。"
-                       "如果 Trae 提示「不支持图片输入」，把高级配置里的「支持图片输入」关掉即可。"
+                  text=f"本套餐 {len(MODELS)} 个模型，每月付费额度合计约 ${total:.0f}{extra}。"
+                       f"价格来自 OpenCode 官方 Go 套餐说明；DeepSeek 分高低峰，表里填的是低峰价。\n"
+                       f"小提示：双击某一行 = 复制它的模型 ID。"
+                       f"如果 Trae 提示「不支持图片输入」，把高级配置里的「支持图片输入」关掉即可。"
                   ).pack(anchor="w", pady=(8, 0))
+
+    def _badge(self, vendor: str):
+        """拿到某个厂商的徽章图片（第一次用的时候现画）。"""
+        if vendor not in self.badges:
+            short, color = VENDORS.get(vendor, ("?", "#9aa3b2"))
+            self.badges[vendor] = make_badge(short, color)
+        return self.badges[vendor]
+
+    def _sort_key(self, row):
+        """排序用的"尺子"。row = (名称, ID, 厂商, 输入价, 输出价, 额度)。"""
+        _, _, _, _, outp, quota = row
+        if self.sort_mode == "price":
+            # 按输出价格排；没价格的排最后
+            return (1, 0.0) if outp is None else (0, outp)
+        # 能力排序：官方给的每月额度越小，说明这个模型越贵越强 → 排越前面
+        if quota is None:            # 官方没额度数据
+            return (2, 0.0)
+        if quota == 0:               # 免费不限量的排在中后段
+            return (1, 0.0)
+        return (0, quota)
+
+    def _set_sort(self, mode: str):
+        """点排序按钮：同一按钮点第二下就反过来排。"""
+        if self.sort_mode == mode:
+            self.sort_desc = not self.sort_desc
+        else:
+            self.sort_mode = mode
+            self.sort_desc = False
+        self._fill_tree()
+        self._update_sort_label()
+
+    def _update_sort_label(self):
+        if self.sort_mode == "cap":
+            how = "由弱到强" if self.sort_desc else "由强到弱"
+            text = f"当前：模型能力排序（{how}，再点一次换方向）"
+        else:
+            how = "由贵到便宜" if self.sort_desc else "由便宜到贵"
+            text = f"当前：价格排序（{how}，再点一次换方向）"
+        self.sort_var.set(text)
 
     def _fill_tree(self):
         keyword = self.search_var.get().strip().lower()
         self.tree.delete(*self.tree.get_children())
+        rows = []
         for name, mid in MODELS:
             if keyword and keyword not in name.lower() and keyword not in mid.lower():
                 continue
-            self.tree.insert("", "end", values=(name, mid))
+            vendor, inp, outp, quota = MODEL_INFO.get(mid, ("—", None, None, None))
+            rows.append((name, mid, vendor, inp, outp, quota))
+        rows.sort(key=self._sort_key, reverse=self.sort_desc)
+        for name, mid, vendor, inp, outp, quota in rows:
+            self.tree.insert("", "end", image=self._badge(vendor), text=name,
+                             values=(vendor, mid, money_text(inp),
+                                     money_text(outp), quota_text(quota)))
 
     def _selected(self):
         sel = self.tree.selection()
         if not sel:
             messagebox.showinfo("提示", "先在下面列表里点一行，再点复制。")
             return None
-        return self.tree.item(sel[0], "values")
+        return sel[0]
 
-    def _copy_row(self, index: int):
-        values = self._selected()
-        if values:
-            self.copy(values[index], "模型 ID" if index else "模型名称")
+    def _copy_id(self):
+        item = self._selected()
+        if item:
+            self.copy(self.tree.item(item, "values")[1], "模型 ID")
+
+    def _copy_name(self):
+        item = self._selected()
+        if item:
+            self.copy(self.tree.item(item, "text"), "模型名称")
 
     def _copy_both(self):
-        values = self._selected()
-        if values:
-            self.copy(f"{values[0]}\n{values[1]}", "「名称 + ID」")
+        item = self._selected()
+        if item:
+            name = self.tree.item(item, "text")
+            mid = self.tree.item(item, "values")[1]
+            self.copy(f"{name}\n{mid}", "「名称 + ID」")
 
     # ---- 页 3：使用说明 ----
     def _build_help_tab(self, nb):
@@ -784,6 +997,12 @@ HELP_TEXT = """OpenCode2Trae 是一个"中转站"程序，专门解决 Trae 连 
     5. 「自定义请求地址」填「接入地址」页里对应的那条；关掉「完整 URL」开关时填基础地址，
        打开时填完整地址。
     6. 「模型 ID」到「模型清单」页复制（双击行 = 复制 ID）；「API 密钥」填你自己的密钥。
+
+顺手的几个小功能
+    · 「接入地址」页有三个直达按钮：官网、API 密钥管理页、用量监控页（看这个月还剩多少额度）。
+    · 「模型清单」页可以按「模型能力」或「价格」排序，每个模型后面还有单价和每月额度参考。
+      名字前面那个彩色小方块 = 是哪家厂商（比如 o 绿 = OpenAI，A 橙 = Anthropic）。
+    · 同一排的排序按钮再点一下 = 反过来排。
 
 要注意的事
     · 本程序必须一直开着。关掉窗口 = 断线。
