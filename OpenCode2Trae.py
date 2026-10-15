@@ -102,8 +102,8 @@ SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
-# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.7，这里就写 2.1.7）
-APP_VERSION = "2.1.7"
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.8，这里就写 2.1.8）
+APP_VERSION = "2.1.8"
 # "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
 UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
 RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
@@ -283,6 +283,37 @@ def make_badge(letter: str, color: str, size: int = 20, pad_right: int = 0) -> t
     return img
 
 
+def make_pin(color: str, size: int = 18) -> tk.PhotoImage:
+    """画一枚"图钉"小图标（就是大头针的样子：圆脑袋 + 圆盘脖 + 一根细针）。
+
+    为什么不直接用 emoji 的 📌？因为 Windows 上的 Tk 不一定有彩色 emoji 字体，
+    很可能画出一个"豆腐块"（□）。所以跟徽章一样，自己一个像素一个像素地点出来，
+    画出来什么样，在哪台电脑上都一样。
+    """
+    img = tk.PhotoImage(width=size, height=size)
+    cx = size / 2.0
+    head_cy = size * 0.30          # 圆脑袋的中心高度
+    head_r = size * 0.235          # 圆脑袋半径
+    brim_top = size * 0.44         # "圆盘脖"上沿
+    brim_bot = size * 0.58         # "圆盘脖"下沿
+    brim_hw = size * 0.30          # "圆盘脖"半宽（比脑袋略宽，才像帽檐）
+    tip_bot = size * 0.90          # 针尖高度
+    needle_hw = max(0.6, size * 0.035)   # 针的半宽（很细，至少半个像素）
+    for y in range(size):
+        for x in range(size):
+            dx, dy = x - cx, y - head_cy
+            on = False
+            if dx * dx + dy * dy <= head_r * head_r:          # 圆脑袋
+                on = True
+            elif brim_top <= y <= brim_bot and abs(x - cx) <= brim_hw:   # 圆盘脖
+                on = True
+            elif brim_bot < y <= tip_bot and abs(x - cx) <= needle_hw:   # 细针
+                on = True
+            if on:
+                img.put(color, to=(x, y, x + 1, y + 1))
+    return img
+
+
 # ---------------------------------------------------------------------------
 # 每个模型的官方信息（数据来自 https://opencode.ai/docs/go/ 的 Go 套餐用量表）
 #   格式：模型 ID -> (厂商, 输入 $/百万字, 输出 $/百万字, 每月额度 $)
@@ -322,6 +353,46 @@ MODEL_INFO = {
     "hy3":                        ("腾讯混元",     0.14,  0.58,  60),
     "space-bunny":                ("Space Bunny", 0.15,  0.60,  30),
 }
+
+
+# ---------------------------------------------------------------------------
+# 哪些模型"能看图"（支持图片输入 = 视觉 / 多模态模型）
+# ---------------------------------------------------------------------------
+# 数据来源：OpenRouter 的公开模型目录 https://openrouter.ai/api/v1/models
+#   每个模型都有一个 architecture.input_modalities 名单，名单里带 "image"
+#   就说明它接受图片输入。下面这些 ID 都是一个一个比对出来的。
+# 说明：OpenCode 官方的 Go 套餐页面没有逐模型标注能不能看图，所以以 OpenRouter
+#   这份目录为准。有 3 个模型（longcat-2.5-preview-free、cat-jam-free、
+#   space-bunny）在官方目录里查不到，宁可不标，也不瞎猜。
+VISION_MODELS = {
+    "claude-haiku-5-5",
+    "grok-4.7",
+    "grok-4.6",
+    "glm-5.3-flash",
+    "gpt-6-luna",
+    "gpt-5.6-luna",
+    "gemini-4-argon-contributor",
+    "kimi-k3",
+    "kimi-k2.7-code",
+    "kimi-k2.6",
+    "step-5-preview-free",
+    "mimo-v2.6-flash",
+    "mimo-v2.6-pro",
+    "mimo-v2.5",
+    "minimax-m3",
+    "muse-spark-1.3-contributor",
+    "muse-spark-1.2-contributor",
+    "qwen3.8-max",
+    "qwen3.8-flash",
+    "qwen3.7-plus",
+    "deepseek-v4.1-flash",
+}
+
+# 列表里给"能看图"的模型名字后面缀的小记号（P = Picture 图片）
+# 为什么用文字而不是图片图标？因为表格的"第一列"这个格子被 Tk 规定死了：
+#   [厂商图标][文字]，图标只能放文字前面，没法放到文字后面。
+#   所以这里用文字记号，反而最稳。复制名字时会被 _clean_name() 去掉，不影响粘贴。
+VISION_MARK = "  [P]"
 
 
 def money_text(value) -> str:
@@ -586,6 +657,7 @@ GREEN = "#16a34a"
 ORANGE = "#d97706"
 LOG_BG = "#0f0f0f"      # 日志框：黑底浅字（终端的感觉）
 LOG_FG = "#d4d4d4"
+PIN_BG = "#ededed"      # 图钉按钮"按下去"（窗口已置顶）时的浅灰底
 
 
 class BridgeApp:
@@ -608,6 +680,14 @@ class BridgeApp:
         self._overlay_bind = None      # 上面那层"纱"跟主窗口联动的绑定 id
         self._frame_off = None         # 窗口外框偏移（见 _frame_offset），量一次就记住
         self.win_geom = None           # 上次记住的窗口位置和大小，形如 "1100x800+320+180"
+
+        # ---- 顶栏那枚"图钉"按钮（切换窗口要不要一直浮在最上面）----
+        # 默认关：程序不会自作主张置顶，只有你自己按了图钉才置顶。
+        # 这个开关不写进配置文件，重启程序还是默认"不置顶"。
+        self.topmost = False           # 现在是不是"一直浮在最上面"
+        self.pin_btn = None            # 顶栏那个图钉按钮（一个 Label）
+        self.pin_off_img = None        # 图钉图标：关（灰的）
+        self.pin_on_img = None         # 图钉图标：开（黑的）
 
         # ---- "检查更新"用到的小物件 ----
         self.update_label = None       # 设置窗里显示"正在检查 / 已是最新 / 发现新版本"的那行字
@@ -779,7 +859,19 @@ class BridgeApp:
         # 右上角一个"设置"小按钮（无边框灰字，跟官网那种低调的按钮一样）
         ttk.Button(head, text="设置", style="Ghost.TButton",
                    command=self._open_settings).pack(side="right",
-                                                     padx=int(round(14 * s)))
+                                                     padx=(int(round(6 * s)), int(round(14 * s))))
+        # 设置按钮左边再放一枚"图钉"：点一下 = 让窗口一直浮在最上面，再点一下放开。
+        # 用 Label 自己画（不用 ttk.Button）：这样才能"图标 + 按下去变底色"。
+        icon_px = int(round(16 * s))
+        self.pin_off_img = make_pin(MUTED, icon_px)      # 关：灰色图钉
+        self.pin_on_img = make_pin(HEAD_FG, icon_px)     # 开：黑色图钉
+        self.pin_btn = tk.Label(head, image=self.pin_off_img, bg=HEAD_BG,
+                                cursor="hand2", padx=int(round(6 * s)),
+                                pady=int(round(3 * s)))
+        self.pin_btn.pack(side="right", padx=(0, int(round(4 * s))))
+        self.pin_btn.bind("<Button-1>", lambda _e: self._toggle_topmost())
+        self.pin_btn.bind("<Enter>", lambda _e: self._pin_hover(True))
+        self.pin_btn.bind("<Leave>", lambda _e: self._pin_hover(False))
         tk.Frame(self.root, bg=BORDER, height=max(1, int(round(1 * s)))).pack(fill="x")
 
         body = ttk.Frame(self.root, padding=(int(round(16 * s)), int(round(12 * s)),
@@ -974,6 +1066,7 @@ class BridgeApp:
                          text=f"「模型名称」随便写（只给你自己看）；「模型 ID」必须和表里一模一样，Trae 才对得上。\n"
                               f"本套餐 {len(MODELS)} 个模型，每月付费额度合计约 ${total:.0f}{extra}。"
                               f"价格来自 OpenCode 官方 Go 套餐说明；DeepSeek 分高低峰，表里填的是低峰价。\n"
+                              f"名字后面写着 [P] 的模型「能看图」（P = 图片 Picture）：可以把它当眼睛，直接把截图丢给它看。\n"
                               f"小提示：双击某一行 = 复制它的模型 ID。"
                               f"如果 Trae 提示「不支持图片输入」，把高级配置里的「支持图片输入」关掉即可。")
         foot.pack(side="bottom", fill="x", pady=(8, 0))
@@ -1066,10 +1159,24 @@ class BridgeApp:
             rows.append((name, mid, vendor, inp, outp, quota))
         rows.sort(key=self._sort_key, reverse=self.sort_desc)
         for i, (name, mid, vendor, inp, outp, quota) in enumerate(rows):
-            self.tree.insert("", "end", image=self._badge(vendor), text=name,
+            # 能看图的模型，名字后面缀一个 [P] 记号（P = 图片 / Picture）
+            shown = name + VISION_MARK if mid in VISION_MODELS else name
+            self.tree.insert("", "end", image=self._badge(vendor), text=shown,
                              tags=("odd",) if i % 2 else (),
                              values=(vendor, mid, money_text(inp),
                                      money_text(outp), quota_text(quota)))
+
+    @staticmethod
+    def _clean_name(text: str) -> str:
+        """把名字后面那个 [P] 记号摘掉，得到"干净"的模型名。
+
+        为什么要摘？因为那只是个给人看的标记，不属于真正的名字。
+        复制出来的名字应该是干净的，粘到别处才不会多出奇怪的后缀。
+        """
+        text = text or ""
+        if text.endswith(VISION_MARK):
+            return text[: -len(VISION_MARK)]
+        return text
 
     def _selected(self):
         sel = self.tree.selection()
@@ -1086,12 +1193,12 @@ class BridgeApp:
     def _copy_name(self):
         item = self._selected()
         if item:
-            self.copy(self.tree.item(item, "text"), "模型名称")
+            self.copy(self._clean_name(self.tree.item(item, "text")), "模型名称")
 
     def _copy_both(self):
         item = self._selected()
         if item:
-            name = self.tree.item(item, "text")
+            name = self._clean_name(self.tree.item(item, "text"))
             mid = self.tree.item(item, "values")[1]
             self.copy(f"{name}\n{mid}", "「名称 + ID」")
 
@@ -1464,6 +1571,8 @@ class BridgeApp:
         except Exception:
             pass
         win.focus_force()
+        if self.topmost:              # 主窗正被"钉"着，设置窗也别落下
+            win.attributes("-topmost", True)
 
     # ---------- 版本 / 检查更新 ----------
     def _set_update_text(self, text, color):
@@ -1620,6 +1729,8 @@ class BridgeApp:
             # 还没显示就去设主人，会被 Tk 随后的显示动作盖掉、白设一场。
             ov.update()
             self._attach_owner(ov, self.root)   # 认主窗口当主人（无边框窗口必须这样绑）
+            if self.topmost:                    # 主窗正被"钉"着，那这层"纱"也得跟上
+                ov.attributes("-topmost", True)
             self.overlay = ov
             # 主窗口要是被挪动或改变大小，"纱"跟着一起变
             self._overlay_bind = self.root.bind("<Configure>", self._sync_overlay, add="+")
@@ -1708,6 +1819,45 @@ class BridgeApp:
         self.update_btn = None
         self.update_url = None
         self._hide_overlay()
+
+    # ---------- 顶栏那枚"图钉"：窗口置顶开关 ----------
+    def _pin_hover(self, inside: bool):
+        """鼠标移到图钉上时给一点点浅灰底色（不抢眼，但知道"这儿能点"）。"""
+        btn = self.pin_btn
+        try:
+            if btn is not None and btn.winfo_exists():
+                btn.configure(bg=PIN_BG if (inside or self.topmost) else HEAD_BG)
+        except Exception:
+            pass
+
+    def _toggle_topmost(self):
+        """点图钉：让窗口"一直浮在最上面"开/关（再点一下放开）。"""
+        self._apply_topmost(not self.topmost)
+        self._log_line("已把窗口钉在最上面" if self.topmost else "窗口不再固定在最上面")
+
+    def _apply_topmost(self, on: bool):
+        """把"要不要置顶"这件事，同时作用到三扇窗（主窗、"纱"、设置窗）。
+
+        为什么要管三扇？因为它们是抱成一摞的：主窗在最下、"纱"居中、设置窗最上。
+        只把主窗钉上去的话，另外两扇窗会脱队（毕竟它们只是"从属窗口"，不跟着置顶）。
+        """
+        self.topmost = bool(on)
+        for w in (self.root, self.overlay, self.settings_win):
+            if w is None:
+                continue
+            try:
+                if w.winfo_exists():
+                    w.attributes("-topmost", self.topmost)
+            except Exception:
+                pass
+        try:
+            if self.pin_btn is not None and self.pin_btn.winfo_exists():
+                self.pin_btn.configure(
+                    image=self.pin_on_img if self.topmost else self.pin_off_img,
+                    bg=PIN_BG if self.topmost else HEAD_BG)
+            self.root.attributes("-topmost", self.topmost)   # 最后再摆正主窗
+        except Exception:
+            pass
 
     def _on_toggle_tray(self):
         want = bool(self.tray_var.get())
