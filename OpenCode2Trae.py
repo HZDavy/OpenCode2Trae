@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -581,6 +582,9 @@ class BridgeApp:
         self.settings_win = None       # 设置小窗口（同时只开一个）
         self.tray_var = None           # 设置窗口里"托盘模式"那个勾（没开窗口时是 None）
         self.auto_var = None           # 设置窗口里"开机自启"那个勾
+        self.overlay = None            # 设置窗口打开时，盖在主窗口上的那层黑色半透明"纱"
+        self._overlay_bind = None      # 上面那层"纱"跟主窗口联动的绑定 id
+        self.win_geom = None           # 上次记住的窗口位置和大小，形如 "1100x800+320+180"
 
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
         self.key_var = tk.StringVar()
@@ -1271,12 +1275,27 @@ class BridgeApp:
         # 上次记住的设置：要不要托盘模式 / 要不要开机自启
         self.tray_enabled = bool(data.get("tray", False))
         self.autostart = bool(data.get("autostart", False))
+        # 上次记住的窗口位置和大小（下次打开就还在老地方，不闪）
+        geom = data.get("geom")
+        if isinstance(geom, str) and _parse_geom(geom):
+            self.win_geom = geom
+
+    def _current_geom(self):
+        """现在窗口的位置和大小，形如 "1100x800+320+180"。"""
+        try:
+            geom = self.root.geometry()
+        except Exception:
+            return None
+        return geom if _parse_geom(geom) else None
 
     def _save_config(self):
         data = {"api_key": self.key_var.get().strip(),
                 "port": self._port() or DEFAULT_PORT,
                 "tray": self.tray_enabled,
                 "autostart": self.autostart}
+        geom = self._current_geom()
+        if geom:
+            data["geom"] = geom
         err = None
         for path in self._config_paths():
             try:
@@ -1300,11 +1319,13 @@ class BridgeApp:
             self.settings_win.focus_force()
             return
 
+        self._show_overlay()          # 先给主窗口盖一层"黑色半透明纱"
         win = tk.Toplevel(self.root)
         self.settings_win = win
         win.title("设置")
         win.configure(bg=BG)
         win.resizable(False, False)
+        win.transient(self.root)      # 归主窗口管：一直压在主窗口上面
         try:
             if os.path.exists(ICON_PATH):
                 win.iconbitmap(default=ICON_PATH)
@@ -1354,10 +1375,95 @@ class BridgeApp:
         ttk.Button(box, text="完成", style="Primary.TButton",
                    command=self._close_settings).pack(anchor="e")
 
+        # 位置：算好了再露脸 —— 直接落在主窗口正中间，不会先闪到屏幕左上角
+        win.update_idletasks()
+        w = win.winfo_reqwidth()
+        h = win.winfo_reqheight()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        # Windows 会给窗口套一圈边框/标题栏，实际位置会比上面算的偏一点点，
+        # 所以量一下"实际中心"和"目标中心"差多少，再挪正一次。
+        win.update_idletasks()
+        mx = self.root.winfo_rootx() + self.root.winfo_width() // 2
+        my = self.root.winfo_rooty() + self.root.winfo_height() // 2
+        sx = win.winfo_rootx() + win.winfo_width() // 2
+        sy = win.winfo_rooty() + win.winfo_height() // 2
+        win.geometry(f"+{x + (mx - sx)}+{y + (my - sy)}")
+        win.protocol("WM_DELETE_WINDOW", self._close_settings)
+        win.lift()
+        try:
+            win.grab_set()            # 打开设置时"锁住"主窗口：点它没反应，只能先关设置
+        except Exception:
+            pass
+        win.focus_force()
+
+    # ---- 主窗口上那层"黑色半透明纱"（设置打开时盖上去）----
+    def _show_overlay(self):
+        self._hide_overlay()
+        try:
+            self.root.update_idletasks()
+            ov = tk.Toplevel(self.root)
+            ov.overrideredirect(True)          # 不要标题栏，就是一块纯色
+            ov.configure(bg="#000000")
+            try:
+                ov.attributes("-alpha", 0.32)  # 半透明：能看见底下的界面，但暗下去
+            except Exception:
+                pass
+            ov.geometry(self._overlay_geom())
+            ov.transient(self.root)
+            ov.lift()
+            self.overlay = ov
+            # 主窗口要是被挪动或改变大小，"纱"跟着一起变
+            self._overlay_bind = self.root.bind("<Configure>", self._sync_overlay, add="+")
+        except Exception:
+            self.overlay = None
+
+    def _overlay_geom(self) -> str:
+        """那块"纱"应该盖在哪儿（正好盖住主窗口）。"""
+        x = self.root.winfo_rootx()
+        y = self.root.winfo_rooty()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        return f"{w}x{h}+{x}+{y}"
+
+    def _sync_overlay(self, _event=None):
+        if self.overlay is None:
+            return
+        try:
+            if not self.overlay.winfo_exists():
+                return
+            self.overlay.geometry(self._overlay_geom())
+            self.overlay.lift()
+            # "纱"抬起来之后，得把设置窗再抬回来，不然设置窗会被压在纱下面变暗
+            if self.settings_win is not None and self.settings_win.winfo_exists():
+                self.settings_win.lift()
+        except Exception:
+            pass
+
+    def _hide_overlay(self):
+        if self._overlay_bind is not None:
+            try:
+                self.root.unbind("<Configure>", self._overlay_bind)
+            except Exception:
+                pass
+            self._overlay_bind = None
+        if self.overlay is not None:
+            try:
+                self.overlay.destroy()
+            except Exception:
+                pass
+            self.overlay = None
+
     def _close_settings(self):
         if self.settings_win is not None and self.settings_win.winfo_exists():
+            try:
+                self.settings_win.grab_release()
+            except Exception:
+                pass
             self.settings_win.destroy()
         self.settings_win = None
+        self._hide_overlay()
 
     def _on_toggle_tray(self):
         want = bool(self.tray_var.get())
@@ -1432,6 +1538,7 @@ class BridgeApp:
 
     def _hide_to_tray(self):
         """把窗口藏起来（但程序还在后台跑）。"""
+        self._close_settings()      # 设置还开着就先收掉（连那层"纱"一起）
         self.root.withdraw()
         if self.tray is not None:
             try:
@@ -1475,10 +1582,15 @@ class BridgeApp:
         if self.autostart:
             self._sync_autostart()
 
-    def _start_hidden(self):
-        """开机自启带 --tray 起来时：别弹窗口，安静待在托盘里。"""
+    def _start_hidden(self) -> bool:
+        """开机自启带 --tray 起来时：别弹窗口，安静待在托盘里。
+
+        返回"有没有真的藏起来"，好让 main() 决定要不要露脸。
+        """
         if self.tray_enabled and self.tray is not None:
             self.root.withdraw()
+            return True
+        return False
 
     # ---------- 关窗口 ----------
     def _on_close(self):
@@ -1488,6 +1600,7 @@ class BridgeApp:
         self._real_quit()
 
     def _real_quit(self):
+        self._close_settings()      # 设置还开着就一起收掉
         self._restore_from_tray()   # 万一还藏在托盘里，先露出来，确认框才看得见
         if self.server is not None:
             if not messagebox.askyesno("确认", "关掉窗口会同时关闭桥接，Trae 就断了。确定吗？"):
@@ -1553,17 +1666,91 @@ def _set_window_icon(root: tk.Tk):
         pass
 
 
-def _fit_window(root: tk.Tk):
-    """按内容实际需要的大小开窗口，并且不允许再拖小，避免内容被截断。"""
+GEOM_RE = re.compile(r"^(\d+)x(\d+)([+-]\d+)([+-]\d+)$")
+
+
+def _parse_geom(text):
+    """把 "1100x800+320+180" 这种窗口位置字符串拆成 (宽, 高, x, y)；拆不动就返回 None。
+
+    打个比方：这行字就像快递单上的"离左墙 320、离上墙 180、箱子 1100×800"，
+    我们要把它读成 4 个数字才能照着摆窗口。
+    """
+    if not isinstance(text, str):
+        return None
+    # Tk 在坐标是负数时会写成 "1783x1529+-252+244"，先把 "+-" 归一成 "-"
+    t = text.strip().replace("+-", "-")
+    m = GEOM_RE.match(t)
+    if not m:
+        return None
+    try:
+        return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+    except Exception:
+        return None
+
+
+def _virtual_screen():
+    """整个"桌面"的范围（多显示器时是并起来的一大块），返回 (左, 上, 宽, 高)。
+
+    单显示器时一般就是 (0, 0, 屏幕宽, 屏幕高)。
+    """
+    try:
+        left = ctypes.windll.user32.GetSystemMetrics(76)    # 虚拟桌面左上角 X
+        top = ctypes.windll.user32.GetSystemMetrics(77)     # 虚拟桌面左上角 Y
+        width = ctypes.windll.user32.GetSystemMetrics(78)   # 虚拟桌面总宽
+        height = ctypes.windll.user32.GetSystemMetrics(79)  # 虚拟桌面总高
+        if width > 0 and height > 0:
+            return left, top, width, height
+    except Exception:
+        pass
+    return 0, 0, None, None
+
+
+def _geom_visible(w: int, h: int, x: int, y: int) -> bool:
+    """记忆里的那个位置，现在还看得见吗？（换过显示器 / 拔了外接屏就可能跑到屏幕外）
+
+    只要窗口的标题栏那一条还落在桌面范围内，就算"看得见"。
+    """
+    vx, vy, vw, vh = _virtual_screen()
+    if vw is None:
+        return True     # 拿不到桌面范围就别拦着，按原样用
+    # 标题栏中心点
+    cx = x + w // 2
+    cy = y + 12
+    return (vx <= cx <= vx + vw) and (vy <= cy <= vy + vh)
+
+
+def _place_window(root: tk.Tk, app):
+    """决定窗口开在哪儿、多大 —— 位置算好之前先别露脸，免得"闪一下"。
+
+    规则：
+      · 第一次打开（没记忆）：乖乖停在屏幕正中间。
+      · 以后打开（有记忆）：回到上次关掉时的位置和大小。
+      · 记忆的位置要是跑到屏幕外了（换过显示器）：退回屏幕正中间。
+    """
     root.update_idletasks()
     need_w = root.winfo_reqwidth() + 20
     need_h = root.winfo_reqheight() + 20
+    # 居中按"主屏幕"算（多显示器时，主屏左上角就是 0,0）
     screen_w = root.winfo_screenwidth()
     screen_h = root.winfo_screenheight()
-    # 屏幕小的时候按屏幕收着点，别把窗口顶到屏幕外面去
-    w = min(need_w, int(screen_w * 0.96))
-    h = min(need_h, int(screen_h * 0.92))
-    root.minsize(w, h)
+
+    # 窗口最小尺寸：内容需要多大就多大，但不能比屏幕还大
+    min_w = min(need_w, int(screen_w * 0.96))
+    min_h = min(need_h, int(screen_h * 0.92))
+    root.minsize(min_w, min_h)
+
+    geom = _parse_geom(app.win_geom) if app.win_geom else None
+    if geom:
+        w, h, x, y = geom
+        # 记忆的大小不能小于内容需要的最小值，也不能比屏幕还大
+        w = max(min_w, min(w, int(screen_w * 0.96)))
+        h = max(min_h, min(h, int(screen_h * 0.92)))
+        if _geom_visible(w, h, x, y):
+            root.geometry(f"{w}x{h}+{x}+{y}")
+            return
+    # 头一回打开（或记忆的位置失效了）：主屏幕正中
+    w = min_w
+    h = min_h
     x = max(0, (screen_w - w) // 2)
     y = max(0, (screen_h - h) // 3)
     root.geometry(f"{w}x{h}+{x}+{y}")
@@ -1576,11 +1763,13 @@ def main():
         pass
     root = tk.Tk()
     root.title("OpenCode2Trae")
+    root.withdraw()               # 先藏起来：等位置和大小都算好了再露脸，不会闪
     _set_window_icon(root)
     app = BridgeApp(root)
-    _fit_window(root)
-    if "--tray" in sys.argv:      # 开机自启时走这条路：不弹主窗口，直接待在托盘里
-        app._start_hidden()
+    _place_window(root, app)
+    hidden = app._start_hidden() if "--tray" in sys.argv else False
+    if not hidden:                # 开机自启住在托盘里就别弹窗口
+        root.deiconify()
     root.mainloop()
 
 
