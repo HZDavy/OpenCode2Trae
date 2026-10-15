@@ -102,11 +102,15 @@ SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
-# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.9，这里就写 2.1.9）
-APP_VERSION = "2.1.9"
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.10，这里就写 2.1.10）
+APP_VERSION = "2.1.10"
 # "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
 UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
 RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
+# 备用查版本的路子：直接打开"最新发布"这个网址，它会自动跳到最新那一版，
+# 我们看它最终跳到哪儿，就知道最新版本号了。国内 api.github.com 常被挡，
+# 但 github.com 这个网页通常能通，所以官方接口失败时改走这条。
+RELEASES_LATEST = "https://github.com/HZDavy/OpenCode2Trae/releases/latest"
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
 
@@ -1692,13 +1696,16 @@ class BridgeApp:
         threading.Thread(target=self._update_worker, daemon=True).start()
         self.root.after(200, self._pump_update)
 
-    def _update_worker(self):
-        """后台线程：去 GitHub 问一句"最新版本是哪个"。
+    def _fetch_latest_ver(self):
+        """去 GitHub 问"最新版本是哪个"，返回 (版本号, 下载页地址)。
 
-        注意：Tk 的界面不能从这个线程直接改（会崩），所以这里只把结果
-        丢进队列，由主线程的 _pump_update 取出来再改界面。
-        就像后厨做好菜先放窗口，由服务员端出去，不让后厨自己跑进大厅。
+        准备了两条路，前一条堵了就走后一条：
+        1）官方接口（api.github.com）——最准，但国内经常连不上；
+        2）直接打开"最新发布"网页（github.com）——它会自动跳到最新那一版，
+           我们看它最终跳到哪个地址（末尾带着 v2.x.x），就知道版本号了。
+        就像找人问路：先打他座机（可能占线），打不通就改打手机。
         """
+        # 路线一：官方接口
         try:
             req = urllib.request.Request(
                 UPDATE_API,
@@ -1708,7 +1715,29 @@ class BridgeApp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
             tag = str(data.get("tag_name") or "").strip()
             url = str(data.get("html_url") or RELEASES_URL)
-            latest = tag.lstrip("vV")
+            if tag:
+                return tag.lstrip("vV"), url
+        except Exception:
+            pass  # 这条不通，安安静静换下一条
+        # 路线二：打开"最新发布"网页，看它最终跳到哪儿
+        req = urllib.request.Request(
+            RELEASES_LATEST, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            final = resp.geturl()
+        m = re.search(r"/tag/([^/?#]+)", final or "")
+        if not m:
+            raise RuntimeError("拿不到版本号")
+        return m.group(1).strip().lstrip("vV"), RELEASES_URL
+
+    def _update_worker(self):
+        """后台线程：去 GitHub 问一句"最新版本是哪个"。
+
+        注意：Tk 的界面不能从这个线程直接改（会崩），所以这里只把结果
+        丢进队列，由主线程的 _pump_update 取出来再改界面。
+        就像后厨做好菜先放窗口，由服务员端出去，不让后厨自己跑进大厅。
+        """
+        try:
+            latest, url = self._fetch_latest_ver()
             if not latest:
                 self.upd_q.put(("error", "GitHub 没给出版本号", None))
             elif _is_newer(latest, APP_VERSION):
