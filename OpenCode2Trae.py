@@ -101,6 +101,7 @@ BRIDGE_VERSION = "2.1"
 SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
+PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
 
@@ -1374,8 +1375,16 @@ class BridgeApp:
 
         tk.Frame(box, bg=BORDER, height=max(1, int(round(1 * s)))).pack(
             fill="x", pady=(int(round(4 * s)), int(round(12 * s))))
-        ttk.Button(box, text="完成", style="Primary.TButton",
-                   command=self._close_settings).pack(anchor="e")
+        # 底下这一行：左边是"去官网看看"的入口，右边是关闭设置的"完成"
+        bottom = tk.Frame(box, bg=BG)
+        bottom.pack(fill="x")
+        bottom.columnconfigure(0, weight=1)
+        ttk.Button(bottom, text="打开项目官网", style="TButton",
+                   command=lambda: self.open_url(PROJECT_URL)).grid(
+            row=0, column=0, sticky="w")
+        ttk.Button(bottom, text="完成", style="Primary.TButton",
+                   command=self._close_settings).grid(
+            row=0, column=1, sticky="e")
 
         # 位置：先在"藏起来"的状态下把尺寸量好、坐标算好，再露脸。
         # 这样窗口一出现就已经在正中间了，不会"先闪到别处再跳过来"。
