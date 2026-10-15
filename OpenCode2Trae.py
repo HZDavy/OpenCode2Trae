@@ -102,8 +102,8 @@ SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
-# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.8，这里就写 2.1.8）
-APP_VERSION = "2.1.8"
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.9，这里就写 2.1.9）
+APP_VERSION = "2.1.9"
 # "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
 UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
 RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
@@ -356,6 +356,53 @@ MODEL_INFO = {
 
 
 # ---------------------------------------------------------------------------
+# 模型的"考分"（第三方测评机构公布的成绩）
+# ---------------------------------------------------------------------------
+# 数据来源：Artificial Analysis 智力指数排行榜（Intelligence Index，满分约 100）
+#   原始榜单：https://artificialanalysis.ai/leaderboards/models
+#   下面这些数值，是照着 2026-10-10 版 https://benchlm.ai/benchmarks/artificialanalysis
+#   和 2026-10-09 版 https://aibars.net/en/models/full 抄下来的。
+#   打个比方：这就是一份"全模型统考的总分"——大家考同一套题，谁分高谁综合能力更强。
+#   凡是榜上查不到成绩的，这里老老实实写 None（列表里显示成「—」，排序时排最后），
+#   绝对不自己拍脑袋编一个数字上去。
+BENCH_SOURCE = "Artificial Analysis 智力指数（2026-10-10 版）"
+BENCH = {
+    "claude-haiku-5-5":           43.4,
+    "grok-4.7":                   46.5,
+    "grok-4.6":                   44.3,
+    "glm-5.3-flash":              41.8,
+    "glm-5.3":                    44.8,
+    "glm-5.2":                    33.7,
+    "gpt-6-luna":                 38.1,
+    "gpt-5.6-luna":               51.2,
+    "gemini-4-argon-contributor": 52.6,
+    "kimi-k3":                    43.6,
+    "kimi-k2.7-code":             25.8,
+    "kimi-k2.6":                  27.0,
+    "longcat-2.0":                33.5,
+    "longcat-2.5-preview-free":   None,   # 榜上查不到
+    "step-5-preview-free":        43.7,
+    "cat-jam-free":               None,   # 榜上查不到
+    "mimo-v2.6-flash":            37.9,
+    "mimo-v2.6-pro":              46.3,
+    "mimo-v2.5":                  None,   # 榜上查不到
+    "mimo-v2.5-pro":              26.0,
+    "minimax-m3":                 29.2,
+    "minimax-m2.7":               22.8,
+    "muse-spark-1.3-contributor": 48.1,
+    "muse-spark-1.2-contributor": 39.6,
+    "qwen3.8-max":                45.4,
+    "qwen3.8-flash":              None,   # 榜上查不到
+    "qwen3.7-plus":               25.2,
+    "deepseek-v4.1-flash":        39.5,
+    "deepseek-v4-pro":            43.8,
+    "hy4-preview":                None,   # 榜上查不到
+    "hy3":                        25.3,
+    "space-bunny":                None,   # 榜上查不到
+}
+
+
+# ---------------------------------------------------------------------------
 # 哪些模型"能看图"（支持图片输入 = 视觉 / 多模态模型）
 # ---------------------------------------------------------------------------
 # 数据来源：OpenRouter 的公开模型目录 https://openrouter.ai/api/v1/models
@@ -411,6 +458,13 @@ def quota_text(value) -> str:
     if value == 0:
         return "免费不限量"
     return f"${value:.0f}"
+
+
+def bench_text(value) -> str:
+    """把"考分"变成好看的字符串。查不到成绩的就是一个短横线「—」。"""
+    if value is None:
+        return "—"
+    return f"{value:.1f}"
 
 
 def models_payload() -> dict:
@@ -668,7 +722,7 @@ class BridgeApp:
         self.external = False          # 端口上是不是已经有别的桥接在跑
         self.key_shown = False
         self.badges = {}               # 厂商徽章图片（缓存起来，不然会被回收掉）
-        self.sort_mode = "cap"         # cap = 能力排序，price = 价格排序
+        self.sort_mode = "cap"         # cap 考分 / alpha 字母 / price 价格 / quota 额度
         self.sort_desc = False         # 是不是"反过来排"
         self.tray_enabled = False      # 关了窗口以后，是收进托盘还是真的退出
         self.autostart = False         # 开机要不要自动跑
@@ -1049,10 +1103,14 @@ class BridgeApp:
         srt = ttk.Frame(tab)
         srt.pack(fill="x", pady=(0, 8))
         ttk.Label(srt, text="排序", style="Hint.TLabel").pack(side="left")
-        ttk.Button(srt, text="按模型能力排序",
+        ttk.Button(srt, text="按考分排序",
                    command=lambda: self._set_sort("cap")).pack(side="left", padx=(4, 4))
+        ttk.Button(srt, text="按字母排序",
+                   command=lambda: self._set_sort("alpha")).pack(side="left", padx=(0, 4))
         ttk.Button(srt, text="按价格排序",
-                   command=lambda: self._set_sort("price")).pack(side="left")
+                   command=lambda: self._set_sort("price")).pack(side="left", padx=(0, 4))
+        ttk.Button(srt, text="按额度排序",
+                   command=lambda: self._set_sort("quota")).pack(side="left")
         ttk.Label(srt, textvariable=self.sort_var,
                   style="Hint.TLabel").pack(side="left", padx=10)
 
@@ -1066,6 +1124,8 @@ class BridgeApp:
                          text=f"「模型名称」随便写（只给你自己看）；「模型 ID」必须和表里一模一样，Trae 才对得上。\n"
                               f"本套餐 {len(MODELS)} 个模型，每月付费额度合计约 ${total:.0f}{extra}。"
                               f"价格来自 OpenCode 官方 Go 套餐说明；DeepSeek 分高低峰，表里填的是低峰价。\n"
+                              f"「考分」= 第三方测评机构 {BENCH_SOURCE} 的统考成绩（满分约 100，越高越聪明），"
+                              f"榜上查不到成绩的显示「—」，排序时排在最后。\n"
                               f"名字后面写着 [P] 的模型「能看图」（P = 图片 Picture）：可以把它当眼睛，直接把截图丢给它看。\n"
                               f"小提示：双击某一行 = 复制它的模型 ID。"
                               f"如果 Trae 提示「不支持图片输入」，把高级配置里的「支持图片输入」关掉即可。")
@@ -1081,10 +1141,12 @@ class BridgeApp:
         wrap.columnconfigure(0, weight=1)
         s = self.ui_scale
         # 列宽也按缩放倍数放大，这样在 175% 下和 100% 下的观感完全一致
-        cols = ("vendor", "id", "inp", "outp", "quota")
+        cols = ("bench", "vendor", "id", "inp", "outp", "quota")
         self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings", height=16)
         self.tree.heading("#0", text="模型名称")
         self.tree.column("#0", width=int(215 * s), anchor="w", minwidth=int(180 * s))
+        self.tree.heading("bench", text="考分")
+        self.tree.column("bench", width=int(66 * s), anchor="e", minwidth=int(58 * s))
         self.tree.heading("vendor", text="厂商")
         self.tree.column("vendor", width=int(92 * s), anchor="w", minwidth=int(76 * s))
         self.tree.heading("id", text="模型 ID")
@@ -1118,16 +1180,21 @@ class BridgeApp:
 
     def _sort_key(self, row):
         """排序用的"尺子"。row = (名称, ID, 厂商, 输入价, 输出价, 额度)。"""
-        _, _, _, _, outp, quota = row
+        _, mid, _, _, outp, quota = row
         if self.sort_mode == "price":
             # 按输出价格排；没价格的排最后
             return (1, 0.0) if outp is None else (0, outp)
-        # 能力排序：官方给的每月额度越小，说明这个模型越贵越强 → 排越前面
-        if quota is None:            # 官方没额度数据
-            return (2, 0.0)
-        if quota == 0:               # 免费不限量的排在中后段
+        if self.sort_mode == "quota":
+            # 按"每月额度 $"这一列的数字排；官方没公布的排最后
+            return (1, 0.0) if quota is None else (0, quota)
+        if self.sort_mode == "alpha":
+            # 按模型名的英文字母排 a→z（大小写不分先后），同厂商的自然就挨在一起了
+            return (row[0] or "").lower()
+        # 考分排序：分数越高越靠前；榜上没成绩的排最后
+        score = BENCH.get(mid)
+        if score is None:
             return (1, 0.0)
-        return (0, quota)
+        return (0, -score)
 
     def _set_sort(self, mode: str):
         """点排序按钮：同一按钮点第二下就反过来排。"""
@@ -1141,11 +1208,17 @@ class BridgeApp:
 
     def _update_sort_label(self):
         if self.sort_mode == "cap":
-            how = "由弱到强" if self.sort_desc else "由强到弱"
-            text = f"当前：模型能力排序（{how}，再点一次换方向）"
+            how = "由低到高" if self.sort_desc else "由高到低"
+            text = f"当前：按考分排序（{how}，再点一次换方向）"
+        elif self.sort_mode == "alpha":
+            how = "Z → A" if self.sort_desc else "A → Z"
+            text = f"当前：按字母排序（{how}，再点一次换方向）"
+        elif self.sort_mode == "quota":
+            how = "由多到少" if self.sort_desc else "由少到多"
+            text = f"当前：按额度排序（{how}，再点一次换方向）"
         else:
             how = "由贵到便宜" if self.sort_desc else "由便宜到贵"
-            text = f"当前：价格排序（{how}，再点一次换方向）"
+            text = f"当前：按价格排序（{how}，再点一次换方向）"
         self.sort_var.set(text)
 
     def _fill_tree(self):
@@ -1163,8 +1236,9 @@ class BridgeApp:
             shown = name + VISION_MARK if mid in VISION_MODELS else name
             self.tree.insert("", "end", image=self._badge(vendor), text=shown,
                              tags=("odd",) if i % 2 else (),
-                             values=(vendor, mid, money_text(inp),
-                                     money_text(outp), quota_text(quota)))
+                             values=(bench_text(BENCH.get(mid)), vendor, mid,
+                                     money_text(inp), money_text(outp),
+                                     quota_text(quota)))
 
     @staticmethod
     def _clean_name(text: str) -> str:
@@ -1188,7 +1262,7 @@ class BridgeApp:
     def _copy_id(self):
         item = self._selected()
         if item:
-            self.copy(self.tree.item(item, "values")[1], "模型 ID")
+            self.copy(self.tree.item(item, "values")[2], "模型 ID")
 
     def _copy_name(self):
         item = self._selected()
@@ -1199,7 +1273,7 @@ class BridgeApp:
         item = self._selected()
         if item:
             name = self._clean_name(self.tree.item(item, "text"))
-            mid = self.tree.item(item, "values")[1]
+            mid = self.tree.item(item, "values")[2]
             self.copy(f"{name}\n{mid}", "「名称 + ID」")
 
     # ---- 页 3：使用说明 ----
@@ -2032,7 +2106,9 @@ HELP_TEXT = """OpenCode2Trae 是一个"中转站"程序，专门解决 Trae 连 
                      想彻底退出，就右键那个小图标选「退出」。
         「开机自动启动」= 每次开机程序自己起来，不用手动点。
     · 「接入地址」页有三个直达按钮：官网、API 密钥管理页、用量监控页（看这个月还剩多少额度）。
-    · 「模型清单」页可以按「模型能力」或「价格」排序，每个模型后面还有单价和每月额度参考。
+    · 「模型清单」页可以按「考分」「字母」「价格」「额度」四种方式排序，每个模型后面还有单价和每月额度参考。
+      「考分」是第三方测评机构 Artificial Analysis 的统考成绩（满分约 100，越高越聪明）。
+      想找同一家的模型，就点「按字母排序」——名字字母挨着，同厂商的自然聚到一块儿了。
       名字前面那个彩色小方块 = 是哪家厂商（比如 o 绿 = OpenAI，A 橙 = Anthropic）。
     · 同一排的排序按钮再点一下 = 反过来排。
 
