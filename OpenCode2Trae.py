@@ -16,8 +16,10 @@ OpenCode2Trae
     · 记住你的 API 密钥，方便随时复制
     · 内置 Go 套餐全部 32 个模型的名称和 ID，点一下就复制
     · 同时支持 OpenAI 格式 和 Claude（Anthropic）格式
+    · 设置里可以开「托盘模式」和「开机自动启动」
 
-只用了 Python 自带的功能，不需要安装任何第三方库。
+除了托盘图标用到 pystray（没装也不影响其它功能，只是开不了托盘模式），
+其余功能都只用 Python 自带的东西。
 运行：python OpenCode2Trae.py
 """
 
@@ -35,6 +37,24 @@ import webbrowser
 from http.client import HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tkinter import messagebox, ttk
+
+# 托盘图标（右上角那种"小图标"）：用 pystray 画。
+# 万一这台电脑没装，程序也照样能跑，只是"托盘模式"开不了 —— 所以这里包一层。
+try:
+    import pystray
+    from PIL import Image as PILImage
+    TRAY_OK = True
+except Exception:          # 没装就优雅降级
+    pystray = None
+    PILImage = None
+    TRAY_OK = False
+
+# 开机启动：其实是往注册表里写一行"开机时要跑什么"。
+# 注册表可以理解成 Windows 的"总设置本"，这里只动当前用户自己的那一份。
+try:
+    import winreg
+except Exception:
+    winreg = None
 
 # ---------------------------------------------------------------------------
 # 基本设置
@@ -82,6 +102,46 @@ CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账�
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
+
+APP_NAME = "OpenCode2Trae"
+# 开机启动项写在注册表这个位置（HKEY_CURRENT_USER 下面，只影响当前登录的用户）
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _launch_command(tray_flag: bool) -> str:
+    """开机时该执行的命令。
+
+    · 打包成 exe：直接跑 exe 自己。
+    · 跑源码：优先用 pythonw.exe（带 w 的那个不会弹出黑框），再带上脚本路径。
+    tray_flag=True 时多加一个 --tray，表示"开机起来先别弹窗口，安静待在托盘里"。
+    """
+    if getattr(sys, "frozen", False):
+        cmd = f'"{sys.executable}"'
+    else:
+        pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        exe = pyw if os.path.exists(pyw) else sys.executable
+        cmd = f'"{exe}" "{os.path.join(BASE_DIR, "OpenCode2Trae.py")}"'
+    return cmd + (" --tray" if tray_flag else "")
+
+
+def autostart_set(on: bool, tray_flag: bool) -> str:
+    """开/关开机启动。成功返回空字符串，失败返回原因。"""
+    if winreg is None:
+        return "这台电脑上没有注册表模块，改不了开机启动。"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            if on:
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ,
+                                  _launch_command(tray_flag))
+            else:
+                try:
+                    winreg.DeleteValue(key, APP_NAME)
+                except FileNotFoundError:
+                    pass
+        return ""
+    except Exception as exc:
+        return str(exc)
 
 # 透传时丢弃的逐跳头（由本机这一跳自己管理）
 DROP_HEADERS = {
@@ -169,9 +229,14 @@ _FONT5x7 = {
 }
 
 
-def make_badge(letter: str, color: str, size: int = 20) -> tk.PhotoImage:
-    """画一个"品牌色圆角方块 + 白字母"的小徽章（跟 logo 一个作用，好认）。"""
-    img = tk.PhotoImage(width=size, height=size)
+def make_badge(letter: str, color: str, size: int = 20, pad_right: int = 0) -> tk.PhotoImage:
+    """画一个"品牌色圆角方块 + 白字母"的小徽章（跟 logo 一个作用，好认）。
+
+    pad_right：图片右边额外留出的透明宽度，用来把徽章和模型名字隔开。
+    为什么要做进图片里？因为如果直接给文字前面加空格，复制模型名的时候
+    会把空格一起复制走，就脏了 —— 加在图片上就没这问题。
+    """
+    img = tk.PhotoImage(width=size + pad_right, height=size)
     radius = max(2, size // 5)
     for x in range(size):
         for y in range(size):
@@ -480,12 +545,24 @@ class BridgeServer:
 # ---------------------------------------------------------------------------
 
 FONT = "Microsoft YaHei UI"
-BG = "#f4f5f7"
-HEAD_BG = "#1f2430"
-CARD = "#ffffff"
-GREY = "#b9bcc4"
-GREEN = "#2eae5b"
-ORANGE = "#e0912f"
+MONO = "Consolas"
+
+# ---- 配色：照着 opencode.ai 的极简风来的 ----
+# 大白底 + 近黑的字 + 一根根"头发丝"一样细的浅灰线，几乎没有多余颜色。
+# 只有表示状态的小圆点（绿/橙）和一个深色日志框保留对比色。
+BG = "#ffffff"          # 窗口底色：纯白
+SURFACE = "#fafafa"     # 输入框/文本框底：极浅灰，用来和纯白区分
+BORDER = "#e5e5e5"      # 分隔线：浅灰头发丝
+TEXT = "#111111"        # 主要文字：近黑（纯黑太硬，opencode 用的是这种）
+MUTED = "#737373"       # 次要说明文字：中灰
+HEAD_BG = "#ffffff"     # 顶栏：白底（原来是深色，现在跟官网一样白）
+HEAD_FG = "#111111"
+INK = "#111111"         # "主按钮"的底色：黑底白字
+GREY = "#c9c9c9"
+GREEN = "#16a34a"
+ORANGE = "#d97706"
+LOG_BG = "#0f0f0f"      # 日志框：黑底浅字（终端的感觉）
+LOG_FG = "#d4d4d4"
 
 
 class BridgeApp:
@@ -498,6 +575,12 @@ class BridgeApp:
         self.badges = {}               # 厂商徽章图片（缓存起来，不然会被回收掉）
         self.sort_mode = "cap"         # cap = 能力排序，price = 价格排序
         self.sort_desc = False         # 是不是"反过来排"
+        self.tray_enabled = False      # 关了窗口以后，是收进托盘还是真的退出
+        self.autostart = False         # 开机要不要自动跑
+        self.tray = None               # 托盘图标对象（pystray 的）
+        self.settings_win = None       # 设置小窗口（同时只开一个）
+        self.tray_var = None           # 设置窗口里"托盘模式"那个勾（没开窗口时是 None）
+        self.auto_var = None           # 设置窗口里"开机自启"那个勾
 
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
         self.key_var = tk.StringVar()
@@ -516,6 +599,7 @@ class BridgeApp:
         self._build()
         self._load_config()
         self._refresh_addresses()
+        self._apply_settings_on_start()
 
         self.port_var.trace_add("write", lambda *_: self._refresh_addresses())
         self.search_var.trace_add("write", lambda *_: self._fill_tree())
@@ -538,49 +622,150 @@ class BridgeApp:
 
     def _setup_style(self):
         s = self.ui_scale
+
+        def px(v):
+            """把"像素数字"按系统缩放倍数放大（字体系统会自动放大，像素不会）。"""
+            return int(round(v * s))
+
         style = ttk.Style()
         try:
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure(".", background=BG, font=(FONT, 10))
+
+        # ---- 底子 ----
+        style.configure(".", background=BG, foreground=TEXT, font=(FONT, 10),
+                        focuscolor=BG)
         style.configure("TFrame", background=BG)
-        style.configure("TLabel", background=BG)
-        style.configure("TLabelframe", background=BG)
-        style.configure("TLabelframe.Label", background=BG, font=(FONT, 10, "bold"))
-        style.configure("TNotebook", background=BG, borderwidth=0)
-        style.configure("TNotebook.Tab", padding=(16, 7), font=(FONT, 10))
-        style.configure("TButton", padding=(10, 5))
+        style.configure("TLabel", background=BG, foreground=TEXT)
+        style.configure("Hint.TLabel", background=BG, foreground=MUTED)
+        style.configure("Title.TLabel", background=BG, foreground=TEXT,
+                        font=(FONT, 14, "bold"))
+        style.configure("Sub.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
+
+        # ---- 按钮：白底 + 一根细灰边；点下去变浅灰 ----
+        # 关键是把 clam 主题自带的"立体感"（lightcolor / darkcolor 两条高光和阴影）
+        # 全部涂成和底色一样，看上去就变成扁平的了，跟官网按钮一个味道。
+        style.configure("TButton", padding=(px(13), px(6)), background="#ffffff",
+                        foreground=TEXT, bordercolor=BORDER, relief="solid",
+                        borderwidth=1, focuscolor="#ffffff",
+                        lightcolor="#ffffff", darkcolor="#ffffff", font=(FONT, 10))
+        style.map("TButton",
+                  background=[("disabled", "#fbfbfb"), ("pressed", "#ededed"),
+                              ("active", "#f5f5f5")],
+                  foreground=[("disabled", "#bdbdbd")],
+                  bordercolor=[("disabled", BORDER), ("active", "#cfcfcf")],
+                  lightcolor=[("pressed", "#ededed"), ("active", "#f5f5f5")],
+                  darkcolor=[("pressed", "#ededed"), ("active", "#f5f5f5")])
+
+        # 主按钮：黑底白字（一个界面里只留一两个，用于"主要动作"）
+        for name in ("Primary.TButton", "Accent.TButton"):
+            style.configure(name, padding=(px(15), px(6)), background=INK,
+                            foreground="#ffffff", bordercolor=INK, relief="solid",
+                            borderwidth=1, focuscolor=INK,
+                            lightcolor=INK, darkcolor=INK, font=(FONT, 10, "bold"))
+            style.map(name,
+                      background=[("disabled", "#d4d4d4"), ("pressed", "#000000"),
+                                  ("active", "#333333")],
+                      foreground=[("disabled", "#ffffff")],
+                      bordercolor=[("disabled", "#d4d4d4"), ("active", "#333333")],
+                      lightcolor=[("pressed", "#000000"), ("active", "#333333")],
+                      darkcolor=[("pressed", "#000000"), ("active", "#333333")])
+
+        # 幽灵按钮：没有边框，平时像一行链接，鼠标放上去才浮出浅灰底
+        style.configure("Ghost.TButton", padding=(px(9), px(6)), background=BG,
+                        foreground=MUTED, bordercolor=BG, relief="flat",
+                        borderwidth=0, focuscolor=BG,
+                        lightcolor=BG, darkcolor=BG, font=(FONT, 10))
+        style.map("Ghost.TButton",
+                  background=[("active", "#f2f2f2"), ("pressed", "#e8e8e8")],
+                  foreground=[("active", TEXT), ("pressed", TEXT)],
+                  bordercolor=[("active", "#f2f2f2"), ("pressed", "#e8e8e8")],
+                  lightcolor=[("active", "#f2f2f2"), ("pressed", "#e8e8e8")],
+                  darkcolor=[("active", "#f2f2f2"), ("pressed", "#e8e8e8")])
+
+        # ---- 输入框：白底一根细灰边，点进去边框变黑 ----
+        style.configure("TEntry", fieldbackground="#ffffff", background="#ffffff",
+                        foreground=TEXT, bordercolor=BORDER, insertcolor=TEXT,
+                        padding=px(5), relief="solid", borderwidth=1,
+                        lightcolor=BORDER, darkcolor=BORDER, arrowcolor=MUTED)
+        style.map("TEntry",
+                  bordercolor=[("focus", INK), ("disabled", BORDER)],
+                  lightcolor=[("focus", INK)],
+                  darkcolor=[("focus", INK)],
+                  fieldbackground=[("readonly", SURFACE), ("disabled", SURFACE)],
+                  foreground=[("disabled", MUTED)])
+
+        # ---- 小方框（分组）----
+        style.configure("TLabelframe", background=BG, bordercolor=BORDER,
+                        relief="solid", borderwidth=1, padding=px(10),
+                        lightcolor=BORDER, darkcolor=BORDER)
+        style.configure("TLabelframe.Label", background=BG, foreground=TEXT,
+                        font=(FONT, 10, "bold"))
+
+        # ---- 表格：纯白底、浅灰表头、选中行只变浅灰不变蓝 ----
         # 行高必须跟着缩放，不然放大后的字会被行边裁掉上下（原来的老毛病）
-        style.configure("Treeview", rowheight=int(round(24 * s)), font=(FONT, 10))
-        style.configure("Treeview.Heading", font=(FONT, 10, "bold"))
-        style.configure("Hint.TLabel", foreground="#6b7280")
+        style.configure("Treeview", background="#ffffff", fieldbackground="#ffffff",
+                        foreground=TEXT, borderwidth=0, relief="flat",
+                        rowheight=int(round(24 * s)), font=(FONT, 10))
+        style.map("Treeview",
+                  background=[("selected", "#f0f0f0")],
+                  foreground=[("selected", TEXT)])
+        style.configure("Treeview.Heading", background="#ffffff", foreground=MUTED,
+                        font=(FONT, 10, "bold"), relief="flat", borderwidth=0,
+                        padding=(px(6), px(6)), lightcolor="#ffffff",
+                        darkcolor="#ffffff")
+        style.map("Treeview.Heading", background=[("active", "#f5f5f5")])
+
+        # ---- 滚动条：细一点、浅一点，别抢眼 ----
+        style.configure("Vertical.TScrollbar", background="#dcdcdc",
+                        troughcolor=BG, bordercolor=BG, arrowcolor="#9a9a9a",
+                        lightcolor="#dcdcdc", darkcolor="#dcdcdc",
+                        relief="flat", borderwidth=0, width=px(10))
+        style.configure("Horizontal.TScrollbar", background="#dcdcdc",
+                        troughcolor=BG, bordercolor=BG, arrowcolor="#9a9a9a",
+                        lightcolor="#dcdcdc", darkcolor="#dcdcdc",
+                        relief="flat", borderwidth=0)
+        style.configure("TSeparator", background=BORDER, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER)
 
     # ---------- 搭界面 ----------
     def _build(self):
-        head = tk.Frame(self.root, bg=HEAD_BG, height=54)
+        s = self.ui_scale
+
+        # 顶栏：白底黑字，底下压一根头发丝一样的细线（跟官网导航一模一样）
+        head = tk.Frame(self.root, bg=HEAD_BG, height=int(round(54 * s)))
         head.pack(fill="x")
         head.pack_propagate(False)
-        tk.Label(head, text="OpenCode2Trae", bg=HEAD_BG, fg="white",
-                 font=(FONT, 13, "bold")).pack(side="left", padx=16)
-        tk.Label(head, text="给 Trae 补上通行证的中转站", bg=HEAD_BG, fg="#9aa3b2",
+        tk.Label(head, text="OpenCode2Trae", bg=HEAD_BG, fg=HEAD_FG,
+                 font=(FONT, 14, "bold")).pack(side="left", padx=int(round(18 * s)))
+        tk.Label(head, text="给 Trae 补上通行证的中转站", bg=HEAD_BG, fg=MUTED,
                  font=(FONT, 9)).pack(side="left")
+        # 右上角一个"设置"小按钮（无边框灰字，跟官网那种低调的按钮一样）
+        ttk.Button(head, text="设置", style="Ghost.TButton",
+                   command=self._open_settings).pack(side="right",
+                                                     padx=int(round(14 * s)))
+        tk.Frame(self.root, bg=BORDER, height=max(1, int(round(1 * s)))).pack(fill="x")
 
-        body = ttk.Frame(self.root, padding=(14, 10, 14, 6))
+        body = ttk.Frame(self.root, padding=(int(round(16 * s)), int(round(12 * s)),
+                                             int(round(16 * s)), int(round(8 * s))))
         body.pack(fill="both", expand=True)
 
         # ==== 控制条 ====
         bar = ttk.Frame(body)
-        bar.pack(fill="x", pady=(0, 10))
-        self.light = tk.Canvas(bar, width=14, height=14, bg=BG, highlightthickness=0)
-        self.dot = self.light.create_oval(2, 2, 12, 12, fill=GREY, outline="")
+        bar.pack(fill="x", pady=(0, int(round(10 * s))))
+        d = int(round(11 * s))
+        self.light = tk.Canvas(bar, width=d, height=d, bg=BG, highlightthickness=0)
+        self.dot = self.light.create_oval(1, 1, d - 1, d - 1, fill=GREY, outline="")
         self.light.pack(side="left")
         ttk.Label(bar, textvariable=self.status_var,
-                  font=(FONT, 10, "bold")).pack(side="left", padx=(6, 18))
-        ttk.Label(bar, text="端口").pack(side="left")
+                  font=(FONT, 10, "bold")).pack(side="left", padx=(int(round(7 * s)), int(round(20 * s))))
+        ttk.Label(bar, text="端口", style="Hint.TLabel").pack(side="left")
         ttk.Entry(bar, textvariable=self.port_var, width=7,
-                  justify="center").pack(side="left", padx=(4, 12))
-        self.btn_start = ttk.Button(bar, text="启动桥接", command=self.start_bridge)
+                  justify="center").pack(side="left", padx=(int(round(5 * s)), int(round(12 * s))))
+        # 主按钮只给"启动桥接"用：全屏就它一个是黑底白字，一眼就知道该点哪个
+        self.btn_start = ttk.Button(bar, text="启动桥接", style="Primary.TButton",
+                                    command=self.start_bridge)
         self.btn_start.pack(side="left")
         self.btn_stop = ttk.Button(bar, text="关闭桥接", command=self.stop_bridge,
                                    state="disabled")
@@ -588,27 +773,74 @@ class BridgeApp:
         ttk.Label(bar, textvariable=self.hint_var,
                   style="Hint.TLabel").pack(side="right")
 
-        nb = ttk.Notebook(body)
-        nb.pack(fill="both", expand=True)
+        nb = ttk.Frame(body)
+        nb.pack(fill="x")
+        content = ttk.Frame(body)
+        content.pack(fill="both", expand=True)
+        content.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
+        self.pages = []          # [(名字, 按钮, 页面, 下划线)]，给"自己画的页签"用
 
-        self._build_addr_tab(nb)
-        self._build_model_tab(nb)
-        self._build_help_tab(nb)
+        self._build_addr_tab(content)
+        self._build_model_tab(content)
+        self._build_help_tab(content)
+        self._build_nav(nb)
 
-        ttk.Separator(body).pack(fill="x", pady=(8, 4))
+        ttk.Separator(body).pack(fill="x", pady=(int(round(10 * s)), int(round(6 * s))))
         logbox = ttk.Frame(body)
         logbox.pack(fill="both")
-        ttk.Label(logbox, text="运行日志").pack(anchor="w")
-        self.log = tk.Text(logbox, height=6, wrap="none", font=("Consolas", 9),
-                           bg="#1f2430", fg="#cfd6e4", insertbackground="#cfd6e4",
-                           borderwidth=0)
-        self.log.pack(fill="both", expand=True, pady=(3, 0))
+        ttk.Label(logbox, text="运行日志", style="Hint.TLabel").pack(anchor="w")
+        self.log = tk.Text(logbox, height=6, wrap="none", font=(MONO, 9),
+                           bg=LOG_BG, fg=LOG_FG, insertbackground=LOG_FG,
+                           borderwidth=0, highlightthickness=0, padx=10, pady=8)
+        self.log.pack(fill="both", expand=True, pady=(int(round(4 * s)), 0))
         self.log.configure(state="disabled")
 
+    # ---- 页签：自己画一排导航（官网页首那种：选中的黑字 + 底下一根黑线）----
+    def _add_page(self, name, page):
+        self.pages.append([name, None, page, None])
+
+    def _build_nav(self, parent):
+        s = self.ui_scale
+        rail = max(1, int(round(2 * s)))       # 导航下面那根线的高度
+        for i, entry in enumerate(self.pages):
+            name = entry[0]
+            btn = tk.Label(parent, text=name, bg=BG, fg=MUTED, font=(FONT, 10),
+                           padx=int(round(12 * s)), pady=int(round(5 * s)),
+                           cursor="hand2")
+            btn.grid(row=0, column=i, sticky="w", padx=(0, int(round(2 * s))))
+            ul = tk.Frame(parent, bg=BORDER, height=rail)
+            ul.grid(row=1, column=i, sticky="ew")   # 不加间隔，线才连成一条
+            btn.bind("<Button-1>", lambda _e, n=name: self._show_page(n))
+            btn.bind("<Enter>", lambda _e, b=btn: b.configure(fg=TEXT))
+            btn.bind("<Leave>",
+                     lambda _e, b=btn, n=name: b.configure(
+                         fg=TEXT if self._page_now == n else MUTED))
+            entry[1], entry[3] = btn, ul
+        # 把线一路铺到右边缘，看起来才像"页首那条横线"
+        tk.Frame(parent, bg=BORDER, height=rail).grid(
+            row=1, column=len(self.pages), sticky="ew")
+        parent.columnconfigure(len(self.pages), weight=1)
+        self._page_now = None
+        self._show_page(self.pages[0][0])
+
+    def _show_page(self, name):
+        self._page_now = name
+        for n, btn, page, ul in self.pages:
+            if n == name:
+                page.tkraise()
+                btn.configure(fg=TEXT, font=(FONT, 10, "bold"))
+                ul.configure(bg=INK)
+            else:
+                btn.configure(fg=MUTED, font=(FONT, 10))
+                ul.configure(bg=BORDER)
+
     # ---- 页 1：接入地址 ----
-    def _build_addr_tab(self, nb):
-        tab = ttk.Frame(nb, padding=12)
-        nb.add(tab, text="接入地址")
+    def _build_addr_tab(self, parent):
+        s = self.ui_scale
+        tab = ttk.Frame(parent, padding=int(round(14 * s)))
+        tab.grid(row=0, column=0, sticky="nsew")
+        self._add_page("接入地址", tab)
 
         key_box = ttk.Labelframe(tab, text=" 你的 API 密钥（Go 套餐的密钥） ", padding=10)
         key_box.pack(fill="x", pady=(0, 10))
@@ -618,18 +850,19 @@ class BridgeApp:
         self.key_entry.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="显示", width=6,
                    command=self._toggle_key).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="保存", width=6,
+        ttk.Button(row, text="保存", width=6, style="Primary.TButton",
                    command=self._save_key).pack(side="left", padx=4)
         ttk.Button(row, text="复制", width=6,
                    command=lambda: self.copy(self.key_var.get().strip(), "密钥")).pack(side="left")
 
         links = ttk.Frame(key_box)
         links.pack(fill="x", pady=(8, 0))
-        ttk.Button(links, text="打开 OpenCode 官网",
+        # 这三个是"跳出去看看"的入口，做成没有边框的幽灵按钮，画面干净点
+        ttk.Button(links, text="打开 OpenCode 官网", style="Ghost.TButton",
                    command=lambda: self.open_url(SITE_URL)).pack(side="left")
-        ttk.Button(links, text="打开 API 密钥管理页",
+        ttk.Button(links, text="打开 API 密钥管理页", style="Ghost.TButton",
                    command=lambda: self.open_url(CONSOLE_URL)).pack(side="left", padx=6)
-        ttk.Button(links, text="打开用量监控页",
+        ttk.Button(links, text="打开用量监控页", style="Ghost.TButton",
                    command=lambda: self.open_url(USAGE_URL)).pack(side="left")
 
         ttk.Label(key_box, style="Hint.TLabel",
@@ -667,13 +900,15 @@ class BridgeApp:
                    command=lambda: self.copy(var.get(), title)).pack(side="left")
 
     # ---- 页 2：模型清单 ----
-    def _build_model_tab(self, nb):
-        tab = ttk.Frame(nb, padding=12)
-        nb.add(tab, text="模型清单")
+    def _build_model_tab(self, parent):
+        s = self.ui_scale
+        tab = ttk.Frame(parent, padding=int(round(14 * s)))
+        tab.grid(row=0, column=0, sticky="nsew")
+        self._add_page("模型清单", tab)
 
         top = ttk.Frame(tab)
         top.pack(fill="x", pady=(0, 6))
-        ttk.Label(top, text="搜索").pack(side="left")
+        ttk.Label(top, text="搜索", style="Hint.TLabel").pack(side="left")
         ttk.Entry(top, textvariable=self.search_var, width=20).pack(side="left", padx=(4, 14))
         ttk.Button(top, text="复制模型 ID",
                    command=self._copy_id).pack(side="left")
@@ -686,7 +921,7 @@ class BridgeApp:
 
         srt = ttk.Frame(tab)
         srt.pack(fill="x", pady=(0, 8))
-        ttk.Label(srt, text="排序").pack(side="left")
+        ttk.Label(srt, text="排序", style="Hint.TLabel").pack(side="left")
         ttk.Button(srt, text="按模型能力排序",
                    command=lambda: self._set_sort("cap")).pack(side="left", padx=(4, 4))
         ttk.Button(srt, text="按价格排序",
@@ -739,6 +974,8 @@ class BridgeApp:
         ysb.grid(row=0, column=1, sticky="ns")
         xsb.grid(row=1, column=0, sticky="ew")
         self.tree.bind("<Double-1>", lambda _e: self._copy_id())
+        # 隔一行铺一点点浅灰底：列多的时候眼睛不容易"串行"（颜色很浅，不抢眼）
+        self.tree.tag_configure("odd", background="#fafafa")
         self._fill_tree()
         self._update_sort_label()
 
@@ -746,8 +983,9 @@ class BridgeApp:
         """拿到某个厂商的徽章图片（第一次用的时候现画）。"""
         if vendor not in self.badges:
             short, color = VENDORS.get(vendor, ("?", "#9aa3b2"))
-            size = int(round(20 * self.ui_scale))
-            self.badges[vendor] = make_badge(short, color, size=size)
+            size = int(round(16 * self.ui_scale))        # 徽章缩小一点
+            gap = int(round(9 * self.ui_scale))          # 右侧留白 = 与模型名拉开距离
+            self.badges[vendor] = make_badge(short, color, size=size, pad_right=gap)
         return self.badges[vendor]
 
     def _sort_key(self, row):
@@ -792,8 +1030,9 @@ class BridgeApp:
             vendor, inp, outp, quota = MODEL_INFO.get(mid, ("—", None, None, None))
             rows.append((name, mid, vendor, inp, outp, quota))
         rows.sort(key=self._sort_key, reverse=self.sort_desc)
-        for name, mid, vendor, inp, outp, quota in rows:
+        for i, (name, mid, vendor, inp, outp, quota) in enumerate(rows):
             self.tree.insert("", "end", image=self._badge(vendor), text=name,
+                             tags=("odd",) if i % 2 else (),
                              values=(vendor, mid, money_text(inp),
                                      money_text(outp), quota_text(quota)))
 
@@ -822,11 +1061,17 @@ class BridgeApp:
             self.copy(f"{name}\n{mid}", "「名称 + ID」")
 
     # ---- 页 3：使用说明 ----
-    def _build_help_tab(self, nb):
-        tab = ttk.Frame(nb, padding=12)
-        nb.add(tab, text="使用说明")
-        text = tk.Text(tab, wrap="word", font=(FONT, 10), bg=CARD, relief="flat",
-                       padx=12, pady=10, borderwidth=1, width=72, height=14)
+    def _build_help_tab(self, parent):
+        s = self.ui_scale
+        tab = ttk.Frame(parent, padding=int(round(14 * s)))
+        tab.grid(row=0, column=0, sticky="nsew")
+        self._add_page("使用说明", tab)
+        # 底色用极浅灰、加一根细灰边，看起来像一张"纸"，跟官网的代码块一个感觉
+        text = tk.Text(tab, wrap="word", font=(FONT, 10), bg=SURFACE, fg=TEXT,
+                       relief="flat", padx=14, pady=12, borderwidth=0,
+                       highlightthickness=1, highlightbackground=BORDER,
+                       highlightcolor=BORDER, insertbackground=TEXT,
+                       width=72, height=14)
         text.pack(fill="both", expand=True)
         text.insert("end", HELP_TEXT)
         text.configure(state="disabled")
@@ -1023,9 +1268,15 @@ class BridgeApp:
         port = data.get("port")
         if isinstance(port, int) and 1 <= port <= 65535:
             self.port_var.set(str(port))
+        # 上次记住的设置：要不要托盘模式 / 要不要开机自启
+        self.tray_enabled = bool(data.get("tray", False))
+        self.autostart = bool(data.get("autostart", False))
 
     def _save_config(self):
-        data = {"api_key": self.key_var.get().strip(), "port": self._port() or DEFAULT_PORT}
+        data = {"api_key": self.key_var.get().strip(),
+                "port": self._port() or DEFAULT_PORT,
+                "tray": self.tray_enabled,
+                "autostart": self.autostart}
         err = None
         for path in self._config_paths():
             try:
@@ -1039,12 +1290,213 @@ class BridgeApp:
                 err = exc          # 这个位置写不了，换下一个
         self._log_line(f"配置没保存成功：{err}")
 
+    # ---------- 设置窗口 ----------
+    def _open_settings(self):
+        """打开"设置"小窗口（里面就是两个开关）。"""
+        s = self.ui_scale
+        if self.settings_win is not None and self.settings_win.winfo_exists():
+            self.settings_win.deiconify()
+            self.settings_win.lift()
+            self.settings_win.focus_force()
+            return
+
+        win = tk.Toplevel(self.root)
+        self.settings_win = win
+        win.title("设置")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        try:
+            if os.path.exists(ICON_PATH):
+                win.iconbitmap(default=ICON_PATH)
+        except Exception:
+            pass
+
+        box = tk.Frame(win, bg=BG, padx=int(round(20 * s)), pady=int(round(16 * s)))
+        box.pack(fill="both", expand=True)
+
+        tk.Label(box, text="设置", bg=BG, fg=TEXT,
+                 font=(FONT, 13, "bold")).pack(anchor="w")
+        tk.Frame(box, bg=BORDER, height=max(1, int(round(1 * s)))).pack(
+            fill="x", pady=(int(round(8 * s)), int(round(12 * s))))
+
+        self.tray_var = tk.BooleanVar(value=self.tray_enabled)
+        self.auto_var = tk.BooleanVar(value=self.autostart)
+
+        def make_switch(text, var, tip, cmd):
+            row = tk.Frame(box, bg=BG)
+            row.pack(fill="x", pady=(0, int(round(12 * s))))
+            cb = tk.Checkbutton(row, text=text, variable=var, command=cmd,
+                                bg=BG, fg=TEXT, activebackground=BG, activeforeground=TEXT,
+                                selectcolor="#ffffff", highlightthickness=0, bd=0,
+                                font=(FONT, 10, "bold"), anchor="w", cursor="hand2")
+            cb.pack(anchor="w")
+            tk.Label(row, text=tip, bg=BG, fg=MUTED, font=(FONT, 9),
+                     justify="left", wraplength=int(round(320 * s))).pack(
+                anchor="w", padx=(int(round(22 * s)), 0))
+
+        make_switch("托盘模式", self.tray_var,
+                    "打开后：点窗口右上角的 × 不退出，只是缩小到右下角的小图标里，"
+                    "桥接照常跑；想彻底退出就右键那个小图标选「退出」。",
+                    self._on_toggle_tray)
+        make_switch("开机自动启动", self.auto_var,
+                    "打开后：每次开机程序自己起来（后台安静运行，不弹窗口），"
+                    "就不用每次手动点了。",
+                    self._on_toggle_autostart)
+
+        if not TRAY_OK:
+            tk.Label(box, text="（这台电脑没装托盘组件 pystray，托盘模式暂时用不了。）",
+                     bg=BG, fg=ORANGE, font=(FONT, 9), justify="left",
+                     wraplength=int(round(320 * s))).pack(
+                anchor="w", pady=(0, int(round(10 * s))))
+
+        tk.Frame(box, bg=BORDER, height=max(1, int(round(1 * s)))).pack(
+            fill="x", pady=(int(round(4 * s)), int(round(12 * s))))
+        ttk.Button(box, text="完成", style="Primary.TButton",
+                   command=self._close_settings).pack(anchor="e")
+
+    def _close_settings(self):
+        if self.settings_win is not None and self.settings_win.winfo_exists():
+            self.settings_win.destroy()
+        self.settings_win = None
+
+    def _on_toggle_tray(self):
+        want = bool(self.tray_var.get())
+        if want and not TRAY_OK:
+            self.tray_var.set(False)
+            messagebox.showwarning(
+                "用不了托盘模式",
+                "这台电脑没装托盘组件 pystray，托盘模式暂时用不了。\n"
+                "其它功能不受影响，可以正常用。")
+            return
+        self._apply_tray(want)
+
+    def _on_toggle_autostart(self):
+        self.autostart = bool(self.auto_var.get())
+        self._sync_autostart()
+        self._save_config()
+
+    # ---------- 托盘图标（右下角那个小图标）----------
+    def _tray_image(self):
+        """托盘图标的图片。优先用 icon.png，读不到就现画一个黑底白字的小方块。"""
+        try:
+            if os.path.exists(ICON_PNG):
+                return PILImage.open(ICON_PNG).convert("RGBA").resize((64, 64))
+        except Exception:
+            pass
+        img = PILImage.new("RGBA", (64, 64), (17, 17, 17, 255))
+        return img
+
+    def _ensure_tray(self) -> bool:
+        """把托盘图标挂上去。已经挂了就什么都不做。成功返回 True。"""
+        if self.tray is not None:
+            return True
+        if not TRAY_OK:
+            return False
+        try:
+            menu = pystray.Menu(
+                pystray.MenuItem("显示主界面", self._tray_show, default=True),
+                pystray.MenuItem("退出 OpenCode2Trae", self._tray_quit),
+            )
+            self.tray = pystray.Icon(APP_NAME, self._tray_image(), APP_NAME, menu)
+            self.tray.run_detached()
+            return True
+        except Exception as exc:
+            self.tray = None
+            self._log_line(f"托盘图标没挂上：{exc}")
+            return False
+
+    def _remove_tray(self):
+        if self.tray is not None:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+            self.tray = None
+
+    # 下面两个是被"托盘菜单"点到的 —— 它们跑在托盘的线程里，
+    # 而界面（Tk）只能在主线程动，所以用 root.after(0, ...) 丢回主线程做。
+    def _tray_show(self, *_a):
+        self.root.after(0, self._restore_from_tray)
+
+    def _tray_quit(self, *_a):
+        self.root.after(0, self._real_quit)
+
+    def _restore_from_tray(self):
+        """把窗口从托盘里"叫回来"。"""
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def _hide_to_tray(self):
+        """把窗口藏起来（但程序还在后台跑）。"""
+        self.root.withdraw()
+        if self.tray is not None:
+            try:
+                self.tray.notify("程序还在后台跑，桥接没断。右键小图标可以退出。", APP_NAME)
+            except Exception:
+                pass
+
+    def _apply_tray(self, on: bool):
+        """开/关托盘模式。"""
+        if on:
+            if not self._ensure_tray():
+                self.tray_enabled = False
+                if self.tray_var is not None:
+                    self.tray_var.set(False)
+                return
+            self.tray_enabled = True
+            self._log_line("托盘模式已打开：关窗口 = 收到托盘，不再退出。")
+        else:
+            self.tray_enabled = False
+            self._remove_tray()
+            self._restore_from_tray()
+            self._log_line("托盘模式已关闭：关窗口就是真的退出。")
+        self._sync_autostart()      # 开机自启那行命令要不要带 --tray，得跟着改
+        self._save_config()
+
+    def _sync_autostart(self):
+        """把"开机自启"这个开关同步到 Windows 注册表里。"""
+        err = autostart_set(self.autostart, self.tray_enabled)
+        if err:
+            self._log_line(f"开机启动没设置成功：{err}")
+        elif self.autostart:
+            self._log_line("开机自动启动已打开。")
+        else:
+            self._log_line("开机自动启动已关闭。")
+
+    def _apply_settings_on_start(self):
+        """程序刚起来时，按上次记住的设置把托盘图标挂上 / 对齐开机自启。"""
+        if self.tray_enabled and TRAY_OK:
+            if not self._ensure_tray():
+                self.tray_enabled = False
+        if self.autostart:
+            self._sync_autostart()
+
+    def _start_hidden(self):
+        """开机自启带 --tray 起来时：别弹窗口，安静待在托盘里。"""
+        if self.tray_enabled and self.tray is not None:
+            self.root.withdraw()
+
+    # ---------- 关窗口 ----------
     def _on_close(self):
+        if self.tray_enabled and self.tray is not None:
+            self._hide_to_tray()    # 开了托盘模式：只是收起来，不退出
+            return
+        self._real_quit()
+
+    def _real_quit(self):
+        self._restore_from_tray()   # 万一还藏在托盘里，先露出来，确认框才看得见
         if self.server is not None:
             if not messagebox.askyesno("确认", "关掉窗口会同时关闭桥接，Trae 就断了。确定吗？"):
+                if self.tray_enabled and self.tray is not None:
+                    self._hide_to_tray()
                 return
             self.server.stop()
             self.server = None
+        self._remove_tray()
         self._save_config()
         self.root.destroy()
 
@@ -1068,13 +1520,17 @@ HELP_TEXT = """OpenCode2Trae 是一个"中转站"程序，专门解决 Trae 连 
     6. 「模型 ID」到「模型清单」页复制（双击行 = 复制 ID）；「API 密钥」填你自己的密钥。
 
 顺手的几个小功能
+    · 右上角有「设置」，里面两个开关：
+        「托盘模式」= 点窗口的 × 不退出，只缩到右下角小图标里（桥接照常跑）；
+                     想彻底退出，就右键那个小图标选「退出」。
+        「开机自动启动」= 每次开机程序自己起来，不用手动点。
     · 「接入地址」页有三个直达按钮：官网、API 密钥管理页、用量监控页（看这个月还剩多少额度）。
     · 「模型清单」页可以按「模型能力」或「价格」排序，每个模型后面还有单价和每月额度参考。
       名字前面那个彩色小方块 = 是哪家厂商（比如 o 绿 = OpenAI，A 橙 = Anthropic）。
     · 同一排的排序按钮再点一下 = 反过来排。
 
 要注意的事
-    · 本程序必须一直开着。关掉窗口 = 断线。
+    · 本程序必须一直开着。关掉窗口 = 断线（开了「托盘模式」除外，那样只是收到托盘里）。
     · 它是本机自用的中转站，不联网存储你的数据，密钥只写在你电脑的配置文件里
       （一般放在程序旁边；程序放在 C 盘根目录这种写不进去的地方时，会自动改放到用户目录）。
     · 如果某个模型报「不支持图片输入」，去高级配置把「支持图片输入」关掉。
@@ -1121,8 +1577,10 @@ def main():
     root = tk.Tk()
     root.title("OpenCode2Trae")
     _set_window_icon(root)
-    BridgeApp(root)
+    app = BridgeApp(root)
     _fit_window(root)
+    if "--tray" in sys.argv:      # 开机自启时走这条路：不弹主窗口，直接待在托盘里
+        app._start_hidden()
     root.mainloop()
 
 
