@@ -656,41 +656,50 @@ class BridgeApp:
         ttk.Label(srt, textvariable=self.sort_var,
                   style="Hint.TLabel").pack(side="left", padx=10)
 
-        wrap = ttk.Frame(tab)
-        wrap.pack(fill="both", expand=True)
-        cols = ("vendor", "id", "inp", "outp", "quota")
-        self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings")
-        self.tree.heading("#0", text="模型名称（Trae 里名字随便写）")
-        self.tree.column("#0", width=215, anchor="w")
-        self.tree.heading("vendor", text="厂商")
-        self.tree.column("vendor", width=88, anchor="w")
-        self.tree.heading("id", text="模型 ID（必须照抄这个）")
-        self.tree.column("id", width=235, anchor="w")
-        self.tree.heading("inp", text="输入 $/百万字")
-        self.tree.column("inp", width=98, anchor="e")
-        self.tree.heading("outp", text="输出 $/百万字")
-        self.tree.column("outp", width=98, anchor="e")
-        self.tree.heading("quota", text="每月额度（官方给的 $）")
-        self.tree.column("quota", width=140, anchor="e")
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="left", fill="y")
-        self.tree.bind("<Double-1>", lambda _e: self._copy_id())
-        self._fill_tree()
-        self._update_sort_label()
-
+        # 底部说明：先占好位置（side="bottom"），这样表格再长也挤不掉这几行字
         total = sum(v[3] for v in MODEL_INFO.values()
                     if isinstance(v[3], (int, float)) and v[3] > 0)
         no_price = sum(1 for _, mid in MODELS
                        if MODEL_INFO.get(mid, (0, None, None, None))[1] is None)
         extra = f"；有 {no_price} 个官方还没公布价格" if no_price else ""
-        ttk.Label(tab, style="Hint.TLabel",
-                  text=f"本套餐 {len(MODELS)} 个模型，每月付费额度合计约 ${total:.0f}{extra}。"
-                       f"价格来自 OpenCode 官方 Go 套餐说明；DeepSeek 分高低峰，表里填的是低峰价。\n"
-                       f"小提示：双击某一行 = 复制它的模型 ID。"
-                       f"如果 Trae 提示「不支持图片输入」，把高级配置里的「支持图片输入」关掉即可。"
-                  ).pack(anchor="w", pady=(8, 0))
+        foot = ttk.Label(tab, style="Hint.TLabel", justify="left", anchor="w",
+                         text=f"「模型名称」随便写（只给你自己看）；「模型 ID」必须和表里一模一样，Trae 才对得上。\n"
+                              f"本套餐 {len(MODELS)} 个模型，每月付费额度合计约 ${total:.0f}{extra}。"
+                              f"价格来自 OpenCode 官方 Go 套餐说明；DeepSeek 分高低峰，表里填的是低峰价。\n"
+                              f"小提示：双击某一行 = 复制它的模型 ID。"
+                              f"如果 Trae 提示「不支持图片输入」，把高级配置里的「支持图片输入」关掉即可。")
+        foot.pack(side="bottom", fill="x", pady=(8, 0))
+        # 窗口一窄就自动折行，文字不会被横向切掉
+        tab.bind("<Configure>",
+                 lambda e: foot.configure(wraplength=max(360, e.width - 24)))
+
+        wrap = ttk.Frame(tab)
+        wrap.pack(fill="both", expand=True)
+        wrap.rowconfigure(0, weight=1)
+        wrap.columnconfigure(0, weight=1)
+        cols = ("vendor", "id", "inp", "outp", "quota")
+        self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings", height=16)
+        self.tree.heading("#0", text="模型名称")
+        self.tree.column("#0", width=215, anchor="w", minwidth=180)
+        self.tree.heading("vendor", text="厂商")
+        self.tree.column("vendor", width=92, anchor="w", minwidth=76)
+        self.tree.heading("id", text="模型 ID")
+        self.tree.column("id", width=235, anchor="w", minwidth=180)
+        self.tree.heading("inp", text="输入 $/百万字")
+        self.tree.column("inp", width=108, anchor="e", minwidth=92)
+        self.tree.heading("outp", text="输出 $/百万字")
+        self.tree.column("outp", width=108, anchor="e", minwidth=92)
+        self.tree.heading("quota", text="每月额度 $")
+        self.tree.column("quota", width=112, anchor="e", minwidth=96)
+        ysb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
+        xsb = ttk.Scrollbar(wrap, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        ysb.grid(row=0, column=1, sticky="ns")
+        xsb.grid(row=1, column=0, sticky="ew")
+        self.tree.bind("<Double-1>", lambda _e: self._copy_id())
+        self._fill_tree()
+        self._update_sort_label()
 
     def _badge(self, vendor: str):
         """拿到某个厂商的徽章图片（第一次用的时候现画）。"""
