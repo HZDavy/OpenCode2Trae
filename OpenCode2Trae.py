@@ -31,6 +31,7 @@ import sys
 import threading
 import tkinter as tk
 import urllib.request
+import webbrowser
 from http.client import HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tkinter import messagebox, ttk
@@ -48,6 +49,8 @@ UPSTREAM_HOST = "opencode.ai"
 UPSTREAM_PREFIX = "/inference/go"
 BRIDGE_ID = "opencode2trae"
 BRIDGE_VERSION = "2.0"
+SITE_URL = "https://opencode.ai"           # 官网
+CONSOLE_URL = "https://opencode.ai/auth"   # 登录 / 充值 / 复制 API 密钥 的地方
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
 
@@ -443,6 +446,14 @@ class BridgeApp:
                    command=self._save_key).pack(side="left", padx=4)
         ttk.Button(row, text="复制", width=6,
                    command=lambda: self.copy(self.key_var.get().strip(), "密钥")).pack(side="left")
+
+        links = ttk.Frame(key_box)
+        links.pack(fill="x", pady=(8, 0))
+        ttk.Button(links, text="打开 OpenCode 官网",
+                   command=lambda: self.open_url(SITE_URL)).pack(side="left")
+        ttk.Button(links, text="打开 API 密钥管理页",
+                   command=lambda: self.open_url(CONSOLE_URL)).pack(side="left", padx=6)
+
         ttk.Label(key_box, style="Hint.TLabel",
                   text="粘贴进来点保存，下次打开自动带出，方便随时复制。\n"
                        "（密钥在本机明文存着，只存在本程序旁边的配置文件里）"
@@ -681,6 +692,15 @@ class BridgeApp:
         self._save_config()
         self._log_line("密钥已保存到配置文件")
         self.copy(self.key_var.get().strip(), "密钥")
+
+    def open_url(self, url: str):
+        """用系统默认浏览器打开网址。"""
+        self._log_line(f"打开浏览器：{url}")
+        try:
+            webbrowser.open(url)
+        except Exception as exc:
+            self._log_line(f"打不开浏览器：{exc}")
+            messagebox.showwarning("打不开", f"没打开浏览器，你手动复制这个地址吧：\n\n{url}")
 
     def copy(self, text: str, what: str = "内容"):
         text = (text or "").strip()
