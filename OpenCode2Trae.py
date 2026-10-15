@@ -584,6 +584,7 @@ class BridgeApp:
         self.auto_var = None           # 设置窗口里"开机自启"那个勾
         self.overlay = None            # 设置窗口打开时，盖在主窗口上的那层黑色半透明"纱"
         self._overlay_bind = None      # 上面那层"纱"跟主窗口联动的绑定 id
+        self._frame_off = None         # 窗口外框偏移（见 _frame_offset），量一次就记住
         self.win_geom = None           # 上次记住的窗口位置和大小，形如 "1100x800+320+180"
 
         self.port_var = tk.StringVar(value=str(DEFAULT_PORT))
@@ -1321,6 +1322,7 @@ class BridgeApp:
 
         self._show_overlay()          # 先给主窗口盖一层"黑色半透明纱"
         win = tk.Toplevel(self.root)
+        win.withdraw()                # 先藏起来：等位置算好了再露脸，不然会先闪一下
         self.settings_win = win
         win.title("设置")
         win.configure(bg=BG)
@@ -1375,28 +1377,59 @@ class BridgeApp:
         ttk.Button(box, text="完成", style="Primary.TButton",
                    command=self._close_settings).pack(anchor="e")
 
-        # 位置：算好了再露脸 —— 直接落在主窗口正中间，不会先闪到屏幕左上角
+        # 位置：先在"藏起来"的状态下把尺寸量好、坐标算好，再露脸。
+        # 这样窗口一出现就已经在正中间了，不会"先闪到别处再跳过来"。
         win.update_idletasks()
         w = win.winfo_reqwidth()
         h = win.winfo_reqheight()
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
-        y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        # 主窗口的 winfo_rootx/rooty 是"看得见的内容区"左上角，而 geometry 的
+        # +x+y 指的是"外框"左上角，两者差一圈边框+标题栏。先量出这个差值（只量一次），
+        # 再一次性算到位，就不用"露脸后量一次再挪一次"（那样会闪）。
+        off_x, off_y = self._frame_offset()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2 - off_x
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2 - off_y
         win.geometry(f"{w}x{h}+{x}+{y}")
-        # Windows 会给窗口套一圈边框/标题栏，实际位置会比上面算的偏一点点，
-        # 所以量一下"实际中心"和"目标中心"差多少，再挪正一次。
-        win.update_idletasks()
-        mx = self.root.winfo_rootx() + self.root.winfo_width() // 2
-        my = self.root.winfo_rooty() + self.root.winfo_height() // 2
-        sx = win.winfo_rootx() + win.winfo_width() // 2
-        sy = win.winfo_rooty() + win.winfo_height() // 2
-        win.geometry(f"+{x + (mx - sx)}+{y + (my - sy)}")
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
+        win.deiconify()               # 位置算好了，这才露脸
         win.lift()
+        try:
+            # 设置窗也得置顶，才会落在"纱"上面（不然会被纱糊住看不清）。
+            # 主窗口本身不置顶，所以设置窗置顶不会影响主窗口。
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
         try:
             win.grab_set()            # 打开设置时"锁住"主窗口：点它没反应，只能先关设置
         except Exception:
             pass
         win.focus_force()
+
+    def _frame_offset(self):
+        """量一下"窗口外框"比"看得见的内容区"往左上多出多少（多了边框 + 标题栏）。
+
+        为什么要量？因为 Tk 里 geometry 的 +x+y 说的是"外框左上角在哪"，而
+        winfo_rootx/rooty 说的是"内容区左上角在哪"，两个数不一样，差一圈边框和标题栏。
+        不补这个差值，窗口在正中间算出来的位置就会往右下偏一点点（本机实测偏 12、52 像素）。
+
+        打个比方：就像快递单上的"箱子从哪开始"和"里面的东西从哪开始"——
+        箱子有个壳、有个盖，里面的东西要往里缩一点才是正好在中间。
+
+        这个差值是固定的，所以开机量一次就存起来，以后直接用，不用每次再量（量了会闪）。
+        万一这会儿主窗口还没显示出来、量不准，就先不记，等下次再量。
+        """
+        if self._frame_off is not None:
+            return self._frame_off
+        try:
+            if self.root.state() == "normal" and self.root.winfo_viewable():
+                g = _parse_geom(self.root.geometry())
+                if g:
+                    off_x = self.root.winfo_rootx() - g[2]
+                    off_y = self.root.winfo_rooty() - g[3]
+                    self._frame_off = (off_x, off_y)
+                    return self._frame_off
+        except Exception:
+            pass
+        return (0, 0)
 
     # ---- 主窗口上那层"黑色半透明纱"（设置打开时盖上去）----
     def _show_overlay(self):
@@ -1413,6 +1446,13 @@ class BridgeApp:
             ov.geometry(self._overlay_geom())
             ov.transient(self.root)
             ov.lift()
+            try:
+                # 实测：光 lift() 没用——设置窗一弹出来，它的"主人"（主窗口）会被一起
+                # 提到上面去，把"纱"盖在下面（真机上量过层级：设置窗 → 主窗口 → 纱）。
+                # 所以"纱"必须设为置顶(always on top)，才能稳稳压在主窗口上面。
+                ov.attributes("-topmost", True)
+            except Exception:
+                pass
             self.overlay = ov
             # 主窗口要是被挪动或改变大小，"纱"跟着一起变
             self._overlay_bind = self.root.bind("<Configure>", self._sync_overlay, add="+")
@@ -1434,10 +1474,11 @@ class BridgeApp:
             if not self.overlay.winfo_exists():
                 return
             self.overlay.geometry(self._overlay_geom())
-            self.overlay.lift()
-            # "纱"抬起来之后，得把设置窗再抬回来，不然设置窗会被压在纱下面变暗
-            if self.settings_win is not None and self.settings_win.winfo_exists():
-                self.settings_win.lift()
+            # 注意：这里千万不能再调 lift()。
+            # 抬窗会反过来触发主窗口的 <Configure> 事件，而 <Configure> 又调用本函数，
+            # 于是"抬一下 → 触发事件 → 再抬一下"死循环，主循环被塞满、界面画不出来
+            # （表现就是：设置窗口一片空白、遮罩也没画出来、CPU 还空转）。
+            # 主窗口在设置打开期间被 grab_set() 锁住、根本动不了，所以也用不着重新抬窗。
         except Exception:
             pass
 
