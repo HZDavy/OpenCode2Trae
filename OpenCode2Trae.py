@@ -102,8 +102,8 @@ SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
-# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.6，这里就写 2.1.6）
-APP_VERSION = "2.1.6"
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.7，这里就写 2.1.7）
+APP_VERSION = "2.1.7"
 # "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
 UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
 RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
@@ -1345,23 +1345,19 @@ class BridgeApp:
         """打开"设置"小窗口（里面是两个开关 + 版本号 / 检查更新）。"""
         s = self.ui_scale
         if self.settings_win is not None and self.settings_win.winfo_exists():
-            self._set_topmost(True)     # 重新把三扇窗钉在一起
             self.settings_win.deiconify()
-            try:
-                self.settings_win.attributes("-topmost", True)
-            except Exception:
-                pass
             self.settings_win.lift()
             self.settings_win.focus_force()
             return
 
-        # 关键一步：主窗口自己也要"钉"在最上层。
-        # 为什么？原来只把"纱"和设置窗钉住、主窗口没钉 —— 别的程序窗口
-        # （浏览器、聊天软件…）就会排到主窗口上面，正好卡在"纱"和主窗口中间，
-        # 看着就像被人插了一刀。三扇窗一起钉，就抱成一堵整墙，谁也插不进来。
-        # 顺序很重要：先钉主窗口，再盖"纱"（纱压在主窗口上），最后弹设置窗（最上面）。
-        self._set_topmost(True)
-        self._show_overlay()          # 再给主窗口盖一层"黑色半透明纱"
+        # 三扇窗靠"认主人"绑成一摞，全程不设"置顶"：
+        #   · "纱"和设置窗都认主窗口当主人（transient）；
+        #   · Windows 的规矩：从属窗口永远待在主人上面。
+        # 于是自然叠成 —— 最下面主窗口、中间"纱"、最上面设置窗，中间不留缝。
+        # 因为不置顶，别的程序窗口随时可以把我们这一摞整个盖住（这是正常的），
+        # 但它们没法再钻到这摞的中间去。
+        # 顺序：先给主窗口盖"纱"，再弹设置窗（后弹的在上）。
+        self._show_overlay()          # 给主窗口盖一层"黑色半透明纱"
         win = tk.Toplevel(self.root)
         win.withdraw()                # 先藏起来：等位置算好了再露脸，不然会先闪一下
         self.settings_win = win
@@ -1462,32 +1458,12 @@ class BridgeApp:
         win.geometry(f"{w}x{h}+{x}+{y}")
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
         win.deiconify()               # 位置算好了，这才露脸
-        try:
-            # 设置窗也要钉在最上层，才会稳稳落在"纱"上面、也在主窗口上面。
-            # 三扇窗都在最上层时，谁后钉谁就在最上面：主窗口 → 纱 → 设置窗，
-            # 一层压一层，中间不留缝，别的程序也就插不进来了。
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
-        win.lift()
+        win.lift()                    # 抬到"纱"上面（同为主窗口的从属窗口，后抬的在上）
         try:
             win.grab_set()            # 打开设置时"锁住"主窗口：点它没反应，只能先关设置
         except Exception:
             pass
         win.focus_force()
-
-    def _set_topmost(self, on: bool):
-        """把主窗口"钉"在最上层（on=True）或者松开（on=False）。
-
-        打个比方：普通窗口像桌上的纸，谁刚被拿起来谁就在上面；
-        钉在最上层的窗口像贴在墙上的告示，不管你怎么翻桌上的纸，它都在最外面。
-        设置窗打开期间，主窗口 + "纱" + 设置窗是一整套，必须一起贴墙上，
-        不然别的程序窗口会从中间挤进来。设置一关就立刻松绑，恢复正常。
-        """
-        try:
-            self.root.attributes("-topmost", bool(on))
-        except Exception:
-            pass
 
     # ---------- 版本 / 检查更新 ----------
     def _set_update_text(self, text, color):
@@ -1639,20 +1615,49 @@ class BridgeApp:
             except Exception:
                 pass
             ov.geometry(self._overlay_geom())
-            ov.transient(self.root)
-            ov.lift()
-            try:
-                # 实测：光 lift() 没用——设置窗一弹出来，它的"主人"（主窗口）会被一起
-                # 提到上面去，把"纱"盖在下面（真机上量过层级：设置窗 → 主窗口 → 纱）。
-                # 所以"纱"必须设为置顶(always on top)，才能稳稳压在主窗口上面。
-                ov.attributes("-topmost", True)
-            except Exception:
-                pass
+            # 先让 Tk 把这块"纱"真正显示出来（映射成窗口），再去认主人。
+            # 顺序不能反：无边框属性是"显示的那一刻"才真正生效的，
+            # 还没显示就去设主人，会被 Tk 随后的显示动作盖掉、白设一场。
+            ov.update()
+            self._attach_owner(ov, self.root)   # 认主窗口当主人（无边框窗口必须这样绑）
             self.overlay = ov
             # 主窗口要是被挪动或改变大小，"纱"跟着一起变
             self._overlay_bind = self.root.bind("<Configure>", self._sync_overlay, add="+")
         except Exception:
             self.overlay = None
+
+    def _attach_owner(self, child, owner):
+        """让 child 窗口"认"owner 当主人（Windows 原生的从属关系）。
+
+        为什么要自己动手？遮罩是一块"无边框"的窗口（overrideredirect）。
+        实测发现：Tk 自带的 transient() 对这种无边框窗口**不设主人** ——
+        它的主人栏是空的，于是它会掉到主窗口下面被盖住，看不见了。
+        （之前是靠"强制置顶"硬压上去的；现在不要置顶了，就得把关系绑正。）
+
+        绑上以后，Windows 会一直保证"从属窗口待在主人上面"，
+        三扇窗自然就抱成一摞，中间插不进别的窗口，而且全程不需要置顶。
+        """
+        try:
+            user32 = ctypes.windll.user32
+            GA_ROOT = 2
+            GWL_HWNDPARENT = -8
+            user32.GetAncestor.restype = ctypes.c_void_p
+            user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            ch = user32.GetAncestor(ctypes.c_void_p(child.winfo_id()), GA_ROOT)
+            oh = user32.GetAncestor(ctypes.c_void_p(owner.winfo_id()), GA_ROOT)
+            if not ch or not oh:
+                return
+            if ctypes.sizeof(ctypes.c_void_p) == 8:
+                user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+                user32.SetWindowLongPtrW.argtypes = [
+                    ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+                user32.SetWindowLongPtrW(ctypes.c_void_p(ch), GWL_HWNDPARENT,
+                                         ctypes.c_void_p(oh))
+            else:
+                user32.SetWindowLongW(ctypes.c_void_p(ch), GWL_HWNDPARENT, oh)
+            # 主人关系一建立，Windows 自己就会把从属窗口摆在主人上面，不用再手动挪位置。
+        except Exception:
+            pass
 
     def _overlay_geom(self) -> str:
         """那块"纱"应该盖在哪儿（正好盖住主窗口）。"""
@@ -1703,7 +1708,6 @@ class BridgeApp:
         self.update_btn = None
         self.update_url = None
         self._hide_overlay()
-        self._set_topmost(False)       # 松绑：主窗口恢复成普通窗口
 
     def _on_toggle_tray(self):
         want = bool(self.tray_var.get())
