@@ -172,7 +172,7 @@ _FONT5x7 = {
 def make_badge(letter: str, color: str, size: int = 20) -> tk.PhotoImage:
     """画一个"品牌色圆角方块 + 白字母"的小徽章（跟 logo 一个作用，好认）。"""
     img = tk.PhotoImage(width=size, height=size)
-    radius = 4
+    radius = max(2, size // 5)
     for x in range(size):
         for y in range(size):
             near_x, near_y = min(x, size - 1 - x), min(y, size - 1 - y)
@@ -183,7 +183,8 @@ def make_badge(letter: str, color: str, size: int = 20) -> tk.PhotoImage:
             img.put(color, to=(x, y, x + 1, y + 1))
     rows = _FONT5x7.get((letter or "?").upper())
     if rows:
-        scale = 2
+        # 点阵字随徽章大小一起缩放（徽章 20px 时 scale=2，35px 时 scale=4）
+        scale = max(1, (size - 4) // 7)
         ox = (size - 5 * scale) // 2
         oy = (size - 7 * scale) // 2
         for r, row in enumerate(rows):
@@ -510,6 +511,7 @@ class BridgeApp:
         self.search_var = tk.StringVar()
         self.sort_var = tk.StringVar()
 
+        self.ui_scale = self._dpi_scale()
         self._setup_style()
         self._build()
         self._load_config()
@@ -522,7 +524,20 @@ class BridgeApp:
         self.root.after(150, self._check_port)
 
     # ---------- 样式 ----------
+    def _dpi_scale(self) -> float:
+        """Windows 的缩放倍数（96 DPI = 1.0，本机 175% 就是 1.75）。
+
+        为什么需要它？字体大小写的是"点"，系统会自动把它放大；但"行高、列宽"
+        这种像素数字，系统不会帮你放大。结果就是：字变大了、装字的框还是原来
+        那么大 —— 字被上下切掉。所以要自己乘一下这个倍数。
+        """
+        try:
+            return max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        except Exception:
+            return 1.0
+
     def _setup_style(self):
+        s = self.ui_scale
         style = ttk.Style()
         try:
             style.theme_use("clam")
@@ -536,7 +551,8 @@ class BridgeApp:
         style.configure("TNotebook", background=BG, borderwidth=0)
         style.configure("TNotebook.Tab", padding=(16, 7), font=(FONT, 10))
         style.configure("TButton", padding=(10, 5))
-        style.configure("Treeview", rowheight=24, font=(FONT, 10))
+        # 行高必须跟着缩放，不然放大后的字会被行边裁掉上下（原来的老毛病）
+        style.configure("Treeview", rowheight=int(round(24 * s)), font=(FONT, 10))
         style.configure("Treeview.Heading", font=(FONT, 10, "bold"))
         style.configure("Hint.TLabel", foreground="#6b7280")
 
@@ -693,26 +709,29 @@ class BridgeApp:
         foot.pack(side="bottom", fill="x", pady=(8, 0))
         # 窗口一窄就自动折行，文字不会被横向切掉
         tab.bind("<Configure>",
-                 lambda e: foot.configure(wraplength=max(360, e.width - 24)))
+                 lambda e: foot.configure(wraplength=max(int(360 * self.ui_scale),
+                                                        e.width - 24)))
 
         wrap = ttk.Frame(tab)
         wrap.pack(fill="both", expand=True)
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
+        s = self.ui_scale
+        # 列宽也按缩放倍数放大，这样在 175% 下和 100% 下的观感完全一致
         cols = ("vendor", "id", "inp", "outp", "quota")
         self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings", height=16)
         self.tree.heading("#0", text="模型名称")
-        self.tree.column("#0", width=215, anchor="w", minwidth=180)
+        self.tree.column("#0", width=int(215 * s), anchor="w", minwidth=int(180 * s))
         self.tree.heading("vendor", text="厂商")
-        self.tree.column("vendor", width=92, anchor="w", minwidth=76)
+        self.tree.column("vendor", width=int(92 * s), anchor="w", minwidth=int(76 * s))
         self.tree.heading("id", text="模型 ID")
-        self.tree.column("id", width=235, anchor="w", minwidth=180)
+        self.tree.column("id", width=int(235 * s), anchor="w", minwidth=int(180 * s))
         self.tree.heading("inp", text="输入 $/百万字")
-        self.tree.column("inp", width=108, anchor="e", minwidth=92)
+        self.tree.column("inp", width=int(108 * s), anchor="e", minwidth=int(92 * s))
         self.tree.heading("outp", text="输出 $/百万字")
-        self.tree.column("outp", width=108, anchor="e", minwidth=92)
+        self.tree.column("outp", width=int(108 * s), anchor="e", minwidth=int(92 * s))
         self.tree.heading("quota", text="每月额度 $")
-        self.tree.column("quota", width=112, anchor="e", minwidth=96)
+        self.tree.column("quota", width=int(112 * s), anchor="e", minwidth=int(96 * s))
         ysb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
         xsb = ttk.Scrollbar(wrap, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
@@ -727,7 +746,8 @@ class BridgeApp:
         """拿到某个厂商的徽章图片（第一次用的时候现画）。"""
         if vendor not in self.badges:
             short, color = VENDORS.get(vendor, ("?", "#9aa3b2"))
-            self.badges[vendor] = make_badge(short, color)
+            size = int(round(20 * self.ui_scale))
+            self.badges[vendor] = make_badge(short, color, size=size)
         return self.badges[vendor]
 
     def _sort_key(self, row):
