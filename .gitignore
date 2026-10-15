@@ -1,0 +1,14 @@
+# 密钥 / 配置：绝对不要提交
+opencode2trae-config.json
+opencode-bridge-config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
