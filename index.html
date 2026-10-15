@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode2Trae — 把 OpenCode Go 接到 Trae 里</title>
+<meta name="description" content="OpenCode2Trae 是一个开源、纯本地的中转站：补上 OpenCode 要求的 x-opencode-session 请求头，让 Trae 的自定义模型正常用上 Go 套餐。单文件、零依赖、OpenAI 与 Claude 双格式。">
+<meta property="og:title" content="OpenCode2Trae — 把 OpenCode Go 接到 Trae 里">
+<meta property="og:description" content="本机中转站，补上 OpenCode 要的通行证，Trae 就能用 Go 套餐了。单文件、零依赖。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://hzdavy.github.io/OpenCode2Trae/">
+<link rel="icon" href="assets/icon.png">
+<style>
+  :root{
+    --bg:#ffffff; --fg:#111111; --muted:#6b7280; --faint:#9ca3af;
+    --border:#e5e7eb; --soft:#f7f7f8; --code:#0b0b0c; --code-fg:#e7e7e7;
+    --accent:#16a34a; --accent-fg:#0f7a37;
+    --shadow:0 1px 2px rgba(0,0,0,.04), 0 8px 30px rgba(0,0,0,.05);
+    --radius:14px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+            "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC",
+            Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+            "Liberation Mono", "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0a0a0a; --fg:#f4f4f5; --muted:#a1a1aa; --faint:#71717a;
+      --border:#232326; --soft:#131316; --code:#000000; --code-fg:#e7e7e7;
+      --accent:#22c55e; --accent-fg:#4ade80;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.45);
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:var(--font); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  a{color:inherit; text-decoration:none}
+  code,pre,.mono{font-family:var(--mono)}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 24px}
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--faint);
+  }
+
+  /* ---------- nav ---------- */
+  header.nav{
+    position:sticky; top:0; z-index:50;
+    backdrop-filter:saturate(180%) blur(12px);
+    background:color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom:1px solid var(--border);
+  }
+  .nav-inner{
+    display:flex; align-items:center; gap:14px;
+    height:60px;
+  }
+  .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:-.01em}
+  .brand img{width:26px; height:26px; border-radius:7px; display:block}
+  .brand span{font-size:16px}
+  .nav-links{margin-left:auto; display:flex; align-items:center; gap:26px}
+  .nav-links a{color:var(--muted); font-size:14.5px}
+  .nav-links a:hover{color:var(--fg)}
+  .nav-links a.gh{
+    display:inline-flex; align-items:center; gap:7px;
+    color:var(--fg); font-weight:600;
+  }
+  .nav-links a.gh svg{width:17px; height:17px}
+  @media (max-width:760px){ .nav-links a:not(.gh){display:none} }
+
+  /* ---------- buttons ---------- */
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:9px;
+    height:44px; padding:0 20px; border-radius:10px;
+    font-size:15px; font-weight:600; border:1px solid transparent;
+    cursor:pointer; transition:transform .12s ease, opacity .15s ease, background .15s ease;
+    white-space:nowrap;
+  }
+  .btn:hover{transform:translateY(-1px)}
+  .btn-primary{background:var(--fg); color:var(--bg)}
+  .btn-primary:hover{opacity:.88}
+  .btn-ghost{border-color:var(--border); color:var(--fg); background:transparent}
+  .btn-ghost:hover{background:var(--soft)}
+
+  /* ---------- hero ---------- */
+  .hero{padding:92px 0 60px; text-align:center}
+  .pill{
+    display:inline-flex; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:12.5px; color:var(--muted);
+    border:1px solid var(--border); border-radius:999px; padding:5px 13px;
+    margin-bottom:26px;
+  }
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--accent)}
+  h1{
+    font-size:clamp(34px, 6vw, 62px); line-height:1.08; letter-spacing:-.03em;
+    margin:0 0 20px; font-weight:750;
+  }
+  h1 .thin{color:var(--faint); font-weight:750}
+  .lede{
+    max-width:640px; margin:0 auto 36px; color:var(--muted);
+    font-size:clamp(16px,2vw,19px); line-height:1.7;
+  }
+  .cta{display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin-bottom:46px}
+
+  /* ---------- install box (mimic opencode tabs) ---------- */
+  .install{
+    max-width:640px; margin:0 auto; text-align:left;
+    border:1px solid var(--border); border-radius:var(--radius);
+    background:var(--soft); overflow:hidden; box-shadow:var(--shadow);
+  }
+  .tabs{display:flex; gap:2px; padding:8px 8px 0; border-bottom:1px solid var(--border); flex-wrap:wrap}
+  .tab{
+    font-family:var(--mono); font-size:13px; color:var(--muted);
+    padding:7px 13px; border-radius:8px 8px 0 0; cursor:pointer;
+    border:1px solid transparent; border-bottom:none; background:transparent;
+  }
+  .tab:hover{color:var(--fg)}
+  .tab[aria-selected="true"]{
+    background:var(--code); border-color:var(--border); color:var(--code-fg);
+  }
+  .cmd{
+    display:flex; align-items:center; gap:14px;
+    background:var(--code); color:var(--code-fg);
+    padding:18px 18px; font-family:var(--mono); font-size:14px;
+  }
+  .cmd .prompt{color:var(--accent); user-select:none}
+  .cmd code{flex:1; overflow-x:auto; white-space:pre-wrap; word-break:break-word}
+  .copy{
+    border:1px solid #2a2a2e; background:#17171a; color:#cfcfcf;
+    border-radius:8px; padding:6px 12px; font-size:12.5px; cursor:pointer;
+    font-family:var(--font); flex:none;
+  }
+  .copy:hover{background:#212126; color:#fff}
+  .install-note{
+    font-size:13px; color:var(--faint); text-align:center; margin-top:14px;
+  }
+
+  /* ---------- sections ---------- */
+  section{padding:74px 0; border-top:1px solid var(--border)}
+  .sec-head{margin-bottom:44px}
+  .sec-head h2{
+    font-size:clamp(24px,3.4vw,36px); letter-spacing:-.02em; margin:10px 0 12px;
+    font-weight:730;
+  }
+  .sec-head p{color:var(--muted); margin:0; max-width:660px; font-size:16.5px}
+
+  /* ---------- feature grid ---------- */
+  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--border);
+        border:1px solid var(--border); border-radius:var(--radius); overflow:hidden}
+  .cell{background:var(--bg); padding:26px 24px}
+  .star{font-family:var(--mono); color:var(--accent); font-size:14px}
+  .cell h3{margin:12px 0 7px; font-size:16.5px; font-weight:650; letter-spacing:-.01em}
+  .cell p{margin:0; color:var(--muted); font-size:14.5px; line-height:1.65}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr 1fr} }
+  @media (max-width:620px){ .grid{grid-template-columns:1fr} }
+
+  /* ---------- steps ---------- */
+  .steps{display:grid; grid-template-columns:1fr 1fr; gap:44px; align-items:start}
+  .step{display:flex; gap:16px; padding:18px 0; border-bottom:1px solid var(--border)}
+  .step:last-child{border-bottom:none}
+  .num{
+    font-family:var(--mono); font-size:13px; font-weight:700;
+    width:30px; height:30px; flex:none; border-radius:8px;
+    border:1px solid var(--border); display:flex; align-items:center; justify-content:center;
+    color:var(--muted);
+  }
+  .step h4{margin:2px 0 5px; font-size:16px; font-weight:650}
+  .step p{margin:0; color:var(--muted); font-size:14.5px}
+  .term{
+    background:var(--code); color:#d6d6d6; border-radius:var(--radius);
+    padding:18px 20px; font-family:var(--mono); font-size:13.5px; line-height:1.85;
+    overflow-x:auto; border:1px solid var(--border);
+  }
+  .term .err{color:#f87171}
+  .term .ok{color:#4ade80}
+  .term .dim{color:#8a8a90}
+  @media (max-width:860px){ .steps{grid-template-columns:1fr; gap:26px} }
+
+  /* ---------- shots ---------- */
+  .shots{display:grid; grid-template-columns:1fr 1fr; gap:22px}
+  .shot{border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+        background:var(--soft); box-shadow:var(--shadow)}
+  .shot img{display:block; width:100%; height:auto}
+  .shot figcaption{font-size:13px; color:var(--faint); padding:11px 14px;
+        font-family:var(--mono); border-top:1px solid var(--border)}
+  @media (max-width:760px){ .shots{grid-template-columns:1fr} }
+
+  /* ---------- stats ---------- */
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:20px; text-align:center}
+  .stat b{display:block; font-size:clamp(26px,4vw,40px); font-weight:750; letter-spacing:-.03em}
+  .stat span{font-size:13.5px; color:var(--muted)}
+  @media (max-width:700px){ .stats{grid-template-columns:1fr 1fr; gap:30px} }
+
+  /* ---------- table ---------- */
+  .tbl{width:100%; border-collapse:collapse; font-size:14.5px;
+       border:1px solid var(--border); border-radius:var(--radius); overflow:hidden}
+  .tbl th,.tbl td{padding:13px 16px; text-align:left; border-bottom:1px solid var(--border)}
+  .tbl th{background:var(--soft); font-weight:650; font-size:13.5px; color:var(--muted)}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl code{font-size:13px; background:var(--soft); padding:2px 7px; border-radius:6px;
+            border:1px solid var(--border)}
+
+  /* ---------- faq ---------- */
+  .faq{border-top:1px solid var(--border)}
+  details{border-bottom:1px solid var(--border)}
+  summary{
+    cursor:pointer; list-style:none; padding:20px 4px; font-size:16.5px; font-weight:600;
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::after{
+    content:"+"; font-family:var(--mono); color:var(--faint); font-size:19px;
+    transition:transform .18s ease; flex:none;
+  }
+  details[open] summary::after{transform:rotate(45deg)}
+  details .ans{padding:0 4px 22px; color:var(--muted); font-size:15px; max-width:820px}
+  details .ans code{background:var(--soft); border:1px solid var(--border);
+    border-radius:6px; padding:2px 7px; font-size:13px}
+
+  /* ---------- cta band ---------- */
+  .band{
+    text-align:center; border:1px solid var(--border); border-radius:20px;
+    padding:56px 30px; background:var(--soft);
+  }
+  .band h2{font-size:clamp(24px,3.6vw,38px); letter-spacing:-.025em; margin:0 0 14px; font-weight:750}
+  .band p{color:var(--muted); margin:0 auto 28px; max-width:520px}
+
+  /* ---------- footer ---------- */
+  footer{border-top:1px solid var(--border); padding:40px 0 60px; color:var(--muted); font-size:14px}
+  .foot{display:flex; flex-wrap:wrap; gap:18px 30px; align-items:center; justify-content:space-between}
+  .foot-links{display:flex; flex-wrap:wrap; gap:22px}
+  .foot-links a:hover{color:var(--fg)}
+  .foot small{color:var(--faint); font-size:12.5px; display:block; margin-top:12px; max-width:760px}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <img src="assets/icon.png" alt="OpenCode2Trae">
+      <span>OpenCode2Trae</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#why">为什么需要</a>
+      <a href="#features">功能</a>
+      <a href="#how">怎么用</a>
+      <a href="#faq">常见问题</a>
+      <a class="gh" href="https://github.com/HZDavy/OpenCode2Trae" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<a id="top"></a>
+<div class="hero wrap">
+  <div class="pill"><span class="dot"></span> 开源 · MIT · 纯本地运行</div>
+  <h1>把 OpenCode Go<br><span class="thin">接到 Trae 里用</span></h1>
+  <p class="lede">
+    OpenCode 要求每个请求都带一张「通行证」，而 Trae 的自定义模型没地方填请求头，
+    于是请求被拦下、报 500。OpenCode2Trae 在你电脑上开一个本机中转站，
+    替 Trae 补上那张通行证——问题就没了。
+  </p>
+  <div class="cta">
+    <a class="btn btn-primary" href="https://github.com/HZDavy/OpenCode2Trae/releases/latest" target="_blank" rel="noopener">下载 exe（免安装）</a>
+    <a class="btn btn-ghost" href="https://github.com/HZDavy/OpenCode2Trae" target="_blank" rel="noopener">查看源码</a>
+  </div>
+
+  <div class="install">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-cmd="下载 OpenCode2Trae.exe → 双击运行 → 点「启动桥接」">下载 exe</button>
+      <button class="tab" role="tab" aria-selected="false" data-cmd="python OpenCode2Trae.py">源码运行</button>
+      <button class="tab" role="tab" aria-selected="false" data-cmd="http://127.0.0.1:8787/v1">Trae 里填的地址</button>
+      <button class="tab" role="tab" aria-selected="false" data-cmd="http://127.0.0.1:8787/anthropic/v1">Claude 用这个</button>
+    </div>
+    <div class="cmd">
+      <span class="prompt">$</span>
+      <code id="cmdline">下载 OpenCode2Trae.exe → 双击运行 → 点「启动桥接」</code>
+      <button class="copy" id="copybtn">复制</button>
+    </div>
+  </div>
+  <p class="install-note">Windows 10 / 11 · 不用装 Python · 也可以只下载单个 .py 文件自己跑</p>
+</div>
+
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Why</div>
+      <h2>它解决什么问题</h2>
+      <p>
+        一句话：<strong>Trae 少了 OpenCode 要的一张「通行证」，本程序专门负责补上它。</strong>
+        下面用大白话讲清楚整件事。
+      </p>
+    </div>
+
+    <div class="steps">
+      <div>
+        <div class="step">
+          <div class="num">01</div>
+          <div>
+            <h4>OpenCode 要求「刷卡进门」</h4>
+            <p>OpenCode Go 要求每个请求都带一个叫 <code class="mono">x-opencode-session</code> 的请求头——就像进楼要刷工牌。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">02</div>
+          <div>
+            <h4>可 Trae 没有这一栏</h4>
+            <p>Trae 的「自定义模型」设置里没有地方能填请求头，于是它一直被挡在门外，只能回来报错。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">03</div>
+          <div>
+            <h4>所以中间加个「前台」</h4>
+            <p>本程序在本机 <code class="mono">127.0.0.1:8787</code> 开个前台：接住 Trae 的请求 → 替它补上通行证 → 转给 OpenCode → 把结果原路送回。</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="term">
+<span class="dim"># 之前：Trae 直接用 OpenCode，被拦下</span>
+<span class="err">WebSocket error: Network IO error:</span>
+<span class="err">error sending request for url</span>
+<span class="err">(…/v1/chat/completions)</span>
+<span class="err">(HTTP Status: 500) (4028)</span>
+
+<span class="dim"># 现在：Trae → 本机中转站 → OpenCode</span>
+<span class="ok">桥接已启动：http://127.0.0.1:8787</span>
+<span class="dim">转发目标：https://opencode.ai/inference/go/…</span>
+<span class="dim">两种格式都支持：OpenAI 走 /v1，Claude 走 /anthropic/v1</span>
+<span class="ok">✓ 请求已补上通行证，正常返回</span>
+        </div>
+        <p class="install-note" style="text-align:left; margin-top:16px">
+          全程只在你自己的电脑上跑，不经过任何第三方服务器。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Features</div>
+      <h2>功能一览</h2>
+      <p>一个窗口搞定「开桥接、拿密钥、抄模型 ID」，不用记命令、不用翻文档。</p>
+    </div>
+
+    <div class="grid">
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>一键开关</h3>
+        <p>点「启动桥接」就跑，左上角指示灯变绿=已接通；再点「关闭桥接」停下。端口还能自己改。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>密钥记得住</h3>
+        <p>把 Go 套餐的密钥粘进去点保存，下次打开自动带出，随时一键复制。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>三张页面直达</h3>
+        <p>内置按钮一键打开 OpenCode 官网、API 密钥管理页、用量监控页（看这个月还剩多少额度）。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>32 个模型全收录</h3>
+        <p>Go 套餐全部模型的名称与 ID 都在表里，支持搜索、双击即复制，再也不用一个个手打。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>价格与额度一目了然</h3>
+        <p>每个模型标注输入价、输出价、官方每月额度（$），还带厂商徽章，支持按能力/按价格排序。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>两种格式都支持</h3>
+        <p>OpenAI 格式走 <span class="mono">/v1</span>，Claude（Anthropic）格式走 <span class="mono">/anthropic/v1</span>，各取所需。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>托盘模式 + 开机自启</h3>
+        <p>设置里可开「托盘模式」（关窗口=收进托盘继续跑）和「开机自动启动」，后台常驻不掉线。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>单文件 · 零依赖</h3>
+        <p>核心只用 Python 标准库，一个 <span class="mono">.py</span> 文件带走；不想装 Python 就直接下 exe。</p>
+      </div>
+      <div class="cell">
+        <div class="star">[*]</div>
+        <h3>窗口记得住位置</h3>
+        <p>首次打开默认居中，之后自动记住上次的位置与大小；打开设置时还有半透明遮罩，干净利落。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="shots">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Preview</div>
+      <h2>界面预览</h2>
+      <p>极简配色，白底黑字，跟 OpenCode 一个调调。</p>
+    </div>
+    <div class="shots">
+      <figure class="shot" style="margin:0">
+        <img src="assets/screenshot.png" alt="OpenCode2Trae 主界面：启动桥接与接入地址">
+        <figcaption>接入地址 · 一键启动 / 复制 Trae 要填的地址</figcaption>
+      </figure>
+      <figure class="shot" style="margin:0">
+        <img src="assets/screenshot-2.png" alt="OpenCode2Trae 模型清单：32 个模型与价格">
+        <figcaption>模型清单 · 32 个模型、价格、额度、厂商徽章</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Get started</div>
+      <h2>怎么用（三步）</h2>
+      <p>从下载到在 Trae 里用上，不超过两分钟。</p>
+    </div>
+
+    <ol style="margin:0 0 40px; padding-left:0; list-style:none">
+      <li class="step"><div class="num">1</div><div>
+        <h4>启动桥接</h4>
+        <p>双击 <span class="mono">OpenCode2Trae.exe</span>，点界面最上面的「启动桥接」，左上角指示灯变绿即成功。</p>
+      </div></li>
+      <li class="step"><div class="num">2</div><div>
+        <h4>填好密钥</h4>
+        <p>切到「接入地址」页，把 Go 套餐的密钥粘进去、点「保存」。</p>
+      </div></li>
+      <li class="step"><div class="num">3</div><div>
+        <h4>在 Trae 里添加自定义模型</h4>
+        <p>模型设置 → 添加自定义模型，按下表填请求地址；模型 ID 到「模型清单」页复制。</p>
+      </div></li>
+    </ol>
+
+    <table class="tbl">
+      <thead>
+        <tr><th>想用的模型</th><th>API 格式</th><th>请求地址</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>GPT / Gemini / Grok / DeepSeek / Qwen / Kimi / GLM 等</td>
+          <td>OpenAI Chat Completions</td>
+          <td><code>http://127.0.0.1:8787/v1</code></td>
+        </tr>
+        <tr>
+          <td>Claude</td>
+          <td>Anthropic Messages</td>
+          <td><code>http://127.0.0.1:8787/anthropic/v1</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="install-note" style="text-align:left">
+      界面里把「完整 URL」开关打开的话，就填各自带 <span class="mono">/chat/completions</span>、<span class="mono">/messages</span> 的那一版。
+      本程序需要一直开着；开了托盘模式后关掉窗口会收进托盘继续跑。
+    </p>
+  </div>
+</section>
+
+<section id="stats">
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><b>32</b><span>个 Go 套餐模型</span></div>
+      <div class="stat"><b>1</b><span>个 Python 文件</span></div>
+      <div class="stat"><b>0</b><span>第三方依赖</span></div>
+      <div class="stat"><b>2</b><span>种 API 格式</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">FAQ</div>
+      <h2>常见问题</h2>
+    </div>
+    <div class="faq">
+      <details open>
+        <summary>它会看到我的密钥吗？数据会被上传吗？</summary>
+        <div class="ans">
+          程序只在本机 <code>127.0.0.1</code> 上监听，不对外开放，也不向任何第三方服务器上传数据。
+          你的密钥只写在本机配置文件 <code>opencode2trae-config.json</code> 里（明文），不上传。
+        </div>
+      </details>
+      <details>
+        <summary>报「不支持图片输入」怎么办？</summary>
+        <div class="ans">
+          这是模型本身的能力限制，不是桥接坏了。去 Trae 的高级配置里把「支持图片输入」关掉即可。
+        </div>
+      </details>
+      <details>
+        <summary>报 401 之类的鉴权错误？</summary>
+        <div class="ans">
+          基本是密钥的问题（填错、过期、没用 Go 套餐的密钥），不是桥接坏了。重新到「接入地址」页粘贴保存一次。
+        </div>
+      </details>
+      <details>
+        <summary>关掉窗口以后 Trae 就连不上了？</summary>
+        <div class="ans">
+          本程序必须一直开着——它就是那条「中转通道」。如果你希望关窗口不退出，
+          到「设置」里打开「托盘模式」，关闭按钮就会变成收进系统托盘。
+        </div>
+      </details>
+      <details>
+        <summary>需要先装 Python 吗？</summary>
+        <div class="ans">
+          不用。直接到 <a href="https://github.com/HZDavy/OpenCode2Trae/releases/latest" target="_blank" rel="noopener">Releases</a>
+          下载 <code>OpenCode2Trae.exe</code> 双击即用。想跑源码的话，Python 3.8+ 自带 tkinter 就够，不需要 pip 装任何东西。
+        </div>
+      </details>
+      <details>
+        <summary>这是 OpenCode 或 Trae 官方的软件吗？</summary>
+        <div class="ans">
+          不是。这是一个个人开源项目，与 OpenCode、Trae 官方均无关联。所用接口来自公开渠道，可能随时变更或失效，
+          请在遵守相关服务条款的前提下使用。
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="band">
+      <h2>现在就把 Go 套餐用起来</h2>
+      <p>一个 exe，双击运行，Trae 立刻多出 32 个海外模型。</p>
+      <div class="cta" style="margin-bottom:0">
+        <a class="btn btn-primary" href="https://github.com/HZDavy/OpenCode2Trae/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+        <a class="btn btn-ghost" href="https://github.com/HZDavy/OpenCode2Trae" target="_blank" rel="noopener">去 GitHub 看看</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div class="brand" style="font-weight:600">
+        <img src="assets/icon.png" alt="OpenCode2Trae" style="width:22px;height:22px;border-radius:6px">
+        <span style="font-size:15px">OpenCode2Trae</span>
+      </div>
+      <div class="foot-links">
+        <a href="https://github.com/HZDavy/OpenCode2Trae" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/HZDavy/OpenCode2Trae/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/HZDavy/OpenCode2Trae/blob/main/README.md" target="_blank" rel="noopener">README</a>
+        <a href="https://github.com/HZDavy/OpenCode2Trae/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        <a href="https://opencode.ai/" target="_blank" rel="noopener">OpenCode 官网</a>
+      </div>
+    </div>
+    <small>
+      个人学习交流用途的非官方软件，与 OpenCode、Trae 官方无任何关联，亦未获其授权或背书。
+      所用接口均来自公开渠道，可能随时变更或失效。请遵守相关服务条款。
+    </small>
+  </div>
+</footer>
+
+<script>
+  // 安装命令切换 + 复制（仿 opencode.ai 的 curl / npm 标签）
+  var tabs = document.querySelectorAll('.tab');
+  var cmdline = document.getElementById('cmdline');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (o) { o.setAttribute('aria-selected', 'false'); });
+      t.setAttribute('aria-selected', 'true');
+      cmdline.textContent = t.getAttribute('data-cmd');
+    });
+  });
+
+  var btn = document.getElementById('copybtn');
+  btn.addEventListener('click', function () {
+    var text = cmdline.textContent;
+    var done = function () {
+      btn.textContent = '已复制';
+      setTimeout(function () { btn.textContent = '复制'; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+</script>
+</body>
+</html>
