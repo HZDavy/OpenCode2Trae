@@ -4,6 +4,14 @@
 
 把 **OpenCode Go** 的订阅接到 **Trae** 里用的本地中转站（带界面）。
 
+## 下载（不想装 Python 就下这个）
+
+打包好的 exe，双击直接用，**不用装 Python**：
+
+**https://github.com/HZDavy/OpenCode2Trae/releases/latest**
+
+> 第一次运行 Windows 可能弹「已保护你的电脑」蓝框 → 点「更多信息」→「仍要运行」即可。
+
 ## 它解决什么问题
 
 OpenCode Go 要求每个请求都带一张"通行证"——一个叫 `x-opencode-session` 的请求头。
@@ -20,6 +28,7 @@ WebSocket error: Network IO error: ... (HTTP Status: 500) (4028)
 
 - 一键**启动 / 关闭**中转站
 - 记住你的 API 密钥，方便随时复制
+- 界面里内置**直达按钮**：一键打开 OpenCode 官网、一键打开 API 管理页面
 - 内置 Go 套餐全部 **32 个模型**的名称和 ID，双击即复制
 - 同时支持 **OpenAI 格式** 和 **Claude（Anthropic）格式**
 - 单文件、零第三方依赖（只用 Python 标准库）
@@ -27,11 +36,12 @@ WebSocket error: Network IO error: ... (HTTP Status: 500) (4028)
 ## 运行环境
 
 - Windows
-- Python 3.8+（自带 tkinter 即可，不需要 pip 装任何东西）
+- 用 exe 版：**什么都不用装**
+- 用源码版：Python 3.8+（自带 tkinter 即可，不需要 pip 装任何东西）
 
 ## 怎么用
 
-1. 双击 `OpenCode2Trae.bat`（或者命令行 `python OpenCode2Trae.py`）。
+1. 双击 `OpenCode2Trae.exe`（源码版则双击 `OpenCode2Trae.bat`，或命令行 `python OpenCode2Trae.py`）。
 2. 点界面最上面的「**启动桥接**」。左上角指示灯变绿 = 通了。
 3. 切到「**接入地址**」页，把 Go 套餐的密钥粘进去、点「保存」（方便以后复制）。
 4. 打开 Trae → 模型设置 → 添加自定义模型，按下表填：

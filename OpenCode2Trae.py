@@ -40,17 +40,24 @@ from tkinter import messagebox, ttk
 # 基本设置
 # ---------------------------------------------------------------------------
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 跑源码时：程序目录 = 脚本所在目录
+# 打包成 exe 后：__file__ 指向临时解包目录，所以配置要落在 exe 自己旁边才不会丢
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    RES_DIR = getattr(sys, "_MEIPASS", BASE_DIR)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    RES_DIR = BASE_DIR
 CONFIG_PATH = os.path.join(BASE_DIR, "opencode2trae-config.json")
-ICON_PATH = os.path.join(BASE_DIR, "OpenCode2Trae.ico")
-ICON_PNG = os.path.join(BASE_DIR, "icon.png")
+ICON_PATH = os.path.join(RES_DIR, "OpenCode2Trae.ico")
+ICON_PNG = os.path.join(RES_DIR, "icon.png")
 
 UPSTREAM_HOST = "opencode.ai"
 UPSTREAM_PREFIX = "/inference/go"
 BRIDGE_ID = "opencode2trae"
 BRIDGE_VERSION = "2.0"
 SITE_URL = "https://opencode.ai"           # 官网
-CONSOLE_URL = "https://opencode.ai/auth"   # 登录 / 充值 / 复制 API 密钥 的地方
+CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
 
@@ -555,7 +562,7 @@ class BridgeApp:
         tab = ttk.Frame(nb, padding=12)
         nb.add(tab, text="使用说明")
         text = tk.Text(tab, wrap="word", font=(FONT, 10), bg=CARD, relief="flat",
-                       padx=12, pady=10, borderwidth=1)
+                       padx=12, pady=10, borderwidth=1, width=72, height=14)
         text.pack(fill="both", expand=True)
         text.insert("end", HELP_TEXT)
         text.configure(state="disabled")
@@ -801,6 +808,22 @@ def _set_window_icon(root: tk.Tk):
         pass
 
 
+def _fit_window(root: tk.Tk):
+    """按内容实际需要的大小开窗口，并且不允许再拖小，避免内容被截断。"""
+    root.update_idletasks()
+    need_w = root.winfo_reqwidth() + 20
+    need_h = root.winfo_reqheight() + 20
+    screen_w = root.winfo_screenwidth()
+    screen_h = root.winfo_screenheight()
+    # 屏幕小的时候按屏幕收着点，别把窗口顶到屏幕外面去
+    w = min(need_w, int(screen_w * 0.96))
+    h = min(need_h, int(screen_h * 0.92))
+    root.minsize(w, h)
+    x = max(0, (screen_w - w) // 2)
+    y = max(0, (screen_h - h) // 3)
+    root.geometry(f"{w}x{h}+{x}+{y}")
+
+
 def main():
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -809,9 +832,8 @@ def main():
     root = tk.Tk()
     root.title("OpenCode2Trae")
     _set_window_icon(root)
-    root.geometry("980x740")
-    root.minsize(880, 660)
     BridgeApp(root)
+    _fit_window(root)
     root.mainloop()
 
 
