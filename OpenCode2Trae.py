@@ -106,8 +106,8 @@ SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
-# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.11，这里就写 2.1.11）
-APP_VERSION = "2.1.11"
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.12，这里就写 2.1.12）
+APP_VERSION = "2.1.12"
 # "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
 UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
 RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
@@ -117,6 +117,19 @@ RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
 RELEASES_LATEST = "https://github.com/HZDavy/OpenCode2Trae/releases/latest"
 DEFAULT_PORT = 8787
 LISTEN_HOST = "127.0.0.1"
+
+# ---- DeepSeek 的"思考强度" ----
+# 说白了就是"让模型想多久"：
+#   跟随 = 不插手，Trae 发什么就原样发什么（等于没开这个功能）
+#   none = 干脆别想，直接答（最快、最省额度，简单问题够用）
+#   low  = 想一点点
+#   high = 想得挺多（DeepSeek 官方默认就是这个档，等于你现在的水位）
+#   max  = 往死里想（最慢、最烧额度，适合难题）
+EFFORT_FOLLOW = "跟随"
+EFFORT_LEVELS = ("none", "low", "high", "max")
+EFFORT_CHOICES = (EFFORT_FOLLOW,) + EFFORT_LEVELS
+# 同一个意思，三种"方言"写法不一样（OpenAI / Claude 各叫各的名字）
+#   注意：只有 DeepSeek 认这几个参数，别的模型一律不碰
 
 APP_NAME = "OpenCode2Trae"
 # 开机启动项写在注册表这个位置（HKEY_CURRENT_USER 下面，只影响当前登录的用户）
@@ -522,6 +535,63 @@ def map_upstream(path: str):
     return None
 
 
+def is_deepseek(model) -> bool:
+    """是不是 DeepSeek 家的模型？（只有它认"思考强度"这套参数）"""
+    return isinstance(model, str) and "deepseek" in model.lower()
+
+
+def apply_effort(body: bytes, model: str, effort: str, is_anthropic: bool):
+    """按设置给请求"改一道思考强度"。返回 (新请求体, 给日志的一句话)。
+
+    打个比方：Trae 寄出去的是一个信封。我们只对 DeepSeek 的信封动手 ——
+    在信封背面补一行"麻烦你想得多一点/少一点"，别家的信封原样递走。
+
+    只有下面三种情况一律不碰（原样放行）：
+      · 模型不是 DeepSeek（别的模型不认这行字，写了反而添乱）
+      · 设置是"跟随"（等于这个功能没开）
+      · 信封拆不开（不是正常 JSON，看不明白就别乱改）
+
+    三种"方言"的写法（同一件事，各家叫法不同）：
+      · OpenAI 格式        → reasoning_effort: "low/high/max"
+      · Claude 格式        → output_config: {"effort": "low/high/max"}
+      · 关掉思考（none）   → 两种格式都写 thinking: {"type": "disabled"}
+                              （官方规定：想关闭只能用它，不能写 effort: none）
+    """
+    if effort not in EFFORT_LEVELS or not is_deepseek(model):
+        return body, None
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return body, None
+    if not isinstance(payload, dict):
+        return body, None
+
+    if effort == "none":
+        # 关掉思考：顺手把残留的"强度"擦干净，免得自相矛盾（又关又拉满）
+        if is_anthropic:
+            config = payload.get("output_config")
+            if isinstance(config, dict):
+                config.pop("effort", None)
+                if not config:
+                    payload.pop("output_config", None)
+        else:
+            payload.pop("reasoning_effort", None)
+        payload["thinking"] = {"type": "disabled"}
+        note = "关掉思考"
+    elif is_anthropic:
+        config = payload.get("output_config")
+        if not isinstance(config, dict):
+            config = {}
+        config["effort"] = effort
+        payload["output_config"] = config
+        note = f"思考强度 {effort}"
+    else:
+        payload["reasoning_effort"] = effort
+        note = f"思考强度 {effort}"
+
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8"), note
+
+
 # ---------------------------------------------------------------------------
 # 桥接内核
 # ---------------------------------------------------------------------------
@@ -611,8 +681,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if is_anthropic and "anthropic-version" not in outgoing:
             outgoing["anthropic-version"] = "2023-06-01"
 
+        # 按设置调一下 DeepSeek 的"思考强度"（别的模型不动）
+        # 设置是"跟随"或者模型不是 DeepSeek 时，这一步啥也不做，等于没开。
+        try:
+            effort = self.server.get_effort() or EFFORT_FOLLOW
+        except Exception:
+            effort = EFFORT_FOLLOW
+        body, effort_note = apply_effort(body, model, effort, is_anthropic)
+
         kind = "claude" if is_anthropic else "openai"
-        self._log(f"-> [{kind}] model={model} session={session_id} 上行 {len(body)} 字节")
+        extra = f" · 已改：{effort_note}" if effort_note else ""
+        self._log(f"-> [{kind}] model={model} session={session_id} "
+                  f"上行 {len(body)} 字节{extra}")
 
         connection = None
         try:
@@ -662,10 +742,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
 class BridgeServer:
     """可随时开关的中转站。启动后跑在后台线程里，界面不会卡。"""
 
-    def __init__(self, host: str, port: int, log):
+    def __init__(self, host: str, port: int, log, get_effort=None):
         self.host = host
         self.port = port
         self.log = log
+        # 一个"随时能问一句"的小接口：现在设置的 DeepSeek 思考强度是啥？
+        # 传个函数进来而不是传个死值，这样在设置里一改就立刻生效，不用重开桥接。
+        self.get_effort = get_effort or (lambda: EFFORT_FOLLOW)
         self.httpd = None
         self.thread = None
 
@@ -673,6 +756,7 @@ class BridgeServer:
         httpd = ThreadingHTTPServer((self.host, self.port), BridgeHandler)
         httpd.daemon_threads = True
         httpd.log_fn = self.log
+        httpd.get_effort = self.get_effort
         self.httpd = httpd
         self.thread = threading.Thread(
             target=httpd.serve_forever, kwargs={"poll_interval": 0.3}, daemon=True
@@ -734,6 +818,8 @@ class BridgeApp:
         self.sort_desc = False         # 是不是"反过来排"
         self.tray_enabled = False      # 关了窗口以后，是收进托盘还是真的退出
         self.autostart = False         # 开机要不要自动跑
+        self.effort_mode = EFFORT_FOLLOW   # DeepSeek 思考强度（跟随 = 不插手）
+        self.effort_var = None         # 设置窗口里那个下拉框（没开窗口时是 None）
         self.tray = None               # 托盘图标对象（pystray 的）
         self.settings_win = None       # 设置小窗口（同时只开一个）
         self.tray_var = None           # 设置窗口里"托盘模式"那个勾（没开窗口时是 None）
@@ -879,6 +965,18 @@ class BridgeApp:
                   darkcolor=[("focus", INK)],
                   fieldbackground=[("readonly", SURFACE), ("disabled", SURFACE)],
                   foreground=[("disabled", MUTED)])
+
+        # ---- 下拉框（设置里的"DeepSeek 思考强度"）：跟输入框一个模样 ----
+        style.configure("TCombobox", fieldbackground="#ffffff", background="#ffffff",
+                        foreground=TEXT, bordercolor=BORDER, arrowcolor=MUTED,
+                        padding=px(4), relief="solid", borderwidth=1,
+                        lightcolor=BORDER, darkcolor=BORDER)
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", "#ffffff"), ("disabled", SURFACE)],
+                  bordercolor=[("focus", INK), ("active", "#cfcfcf")],
+                  arrowcolor=[("active", TEXT)],
+                  lightcolor=[("focus", INK)],
+                  darkcolor=[("focus", INK)])
 
         # ---- 小方框（分组）----
         style.configure("TLabelframe", background=BG, bordercolor=BORDER,
@@ -1363,7 +1461,8 @@ class BridgeApp:
                 )
             return
         try:
-            server = BridgeServer(LISTEN_HOST, port, self._log_line)
+            server = BridgeServer(LISTEN_HOST, port, self._log_line,
+                                  get_effort=lambda: self.effort_mode)
             server.start()
         except OSError as exc:
             messagebox.showerror("启动失败",
@@ -1515,6 +1614,10 @@ class BridgeApp:
         # 上次记住的设置：要不要托盘模式 / 要不要开机自启
         self.tray_enabled = bool(data.get("tray", False))
         self.autostart = bool(data.get("autostart", False))
+        # 上次记住的 DeepSeek 思考强度（认不出来的值就当"跟随"）
+        effort = data.get("deepseek_effort")
+        if isinstance(effort, str) and effort in EFFORT_CHOICES:
+            self.effort_mode = effort
         # 上次记住的窗口位置和大小（下次打开就还在老地方，不闪）
         geom = data.get("geom")
         if isinstance(geom, str) and _parse_geom(geom):
@@ -1532,7 +1635,8 @@ class BridgeApp:
         data = {"api_key": self.key_var.get().strip(),
                 "port": self._port() or DEFAULT_PORT,
                 "tray": self.tray_enabled,
-                "autostart": self.autostart}
+                "autostart": self.autostart,
+                "deepseek_effort": self.effort_mode}
         geom = self._current_geom()
         if geom:
             data["geom"] = geom
@@ -1611,6 +1715,31 @@ class BridgeApp:
                     "打开后：每次开机程序自己起来（后台安静运行，不弹窗口），"
                     "就不用每次手动点了。",
                     self._on_toggle_autostart)
+
+        # ---- DeepSeek 思考强度 ----
+        # 这个只影响 DeepSeek 家的模型：给发出去的请求补一句"想多久"。
+        # 别的模型一律不碰（它们不认这套参数，硬塞进去只会添乱）。
+        eff_box = tk.Frame(box, bg=BG)
+        eff_box.pack(fill="x", pady=(0, int(round(12 * s))))
+        eff_head = tk.Frame(eff_box, bg=BG)
+        eff_head.pack(fill="x")
+        tk.Label(eff_head, text="DeepSeek 思考强度", bg=BG, fg=TEXT,
+                 font=(FONT, 10, "bold")).pack(side="left")
+        self.effort_var = tk.StringVar(value=self.effort_mode)
+        combo = ttk.Combobox(eff_head, textvariable=self.effort_var, width=7,
+                             state="readonly", values=list(EFFORT_CHOICES))
+        combo.pack(side="right")
+        combo.bind("<<ComboboxSelected>>", self._on_effort_change)
+        tk.Label(eff_box,
+                 text="只对 DeepSeek 模型生效，别的模型不受影响。\n"
+                      "「跟随」= 不插手（等于没开这个功能）；\n"
+                      "「none」= 别多想、直接答（最快最省，简单问题够用）；\n"
+                      "「high」= 想得挺多（官方默认就是这档）；\n"
+                      "「max」= 往死里想（难题更准，但更慢、更费额度）。\n"
+                      "改完立刻生效，不用重启桥接。",
+                 bg=BG, fg=MUTED, font=(FONT, 9), justify="left",
+                 wraplength=int(round(320 * s))).pack(
+            anchor="w", pady=(int(round(4 * s)), 0))
 
         if not TRAY_OK:
             tk.Label(box, text="（这台电脑没装托盘组件 pystray，托盘模式暂时用不了。）",
@@ -2002,6 +2131,19 @@ class BridgeApp:
         self._sync_autostart()
         self._save_config()
 
+    def _on_effort_change(self, _event=None):
+        """设置窗里换了"思考强度"：记住它、存进配置，并在日志里说一句。"""
+        value = (self.effort_var.get() if self.effort_var else "").strip()
+        if value not in EFFORT_CHOICES:
+            value = EFFORT_FOLLOW
+        self.effort_mode = value
+        self._save_config()
+        if value == EFFORT_FOLLOW:
+            self._log_line("DeepSeek 思考强度：跟随（不插手，Trae 发什么就发什么）")
+        else:
+            self._log_line(f"DeepSeek 思考强度：{value}"
+                           "（只对 deepseek 的模型生效，马上生效）")
+
     # ---------- 托盘图标（右下角那个小图标）----------
     def _tray_image(self):
         """托盘图标的图片。优先用 icon.png，读不到就现画一个黑底白字的小方块。"""
@@ -2156,10 +2298,14 @@ HELP_TEXT = """OpenCode2Trae 是一个"中转站"程序，专门解决 Trae 连 
     6. 「模型 ID」到「模型清单」页复制（双击行 = 复制 ID）；「API 密钥」填你自己的密钥。
 
 顺手的几个小功能
-    · 右上角有「设置」，里面两个开关：
+    · 右上角有「设置」，里面几个开关：
         「托盘模式」= 点窗口的 × 不退出，只缩到右下角小图标里（桥接照常跑）；
                      想彻底退出，就右键那个小图标选「退出」。
         「开机自动启动」= 每次开机程序自己起来，不用手动点。
+        「DeepSeek 思考强度」= 管 DeepSeek 模型"想多久"，四档：
+                     none = 别多想、直接答（最快最省）；low = 想一点点；
+                     high = 想得挺多（官方默认）；max = 往死里想（更准但更慢）。
+                     拿不准就保持「跟随」，等于不插手，别的模型完全不受影响。
     · 「接入地址」页有三个直达按钮：官网、API 密钥管理页、用量监控页（看这个月还剩多少额度）。
     · 「模型清单」页可以按「考分」「字母」「价格」「额度」四种方式排序，每个模型后面还有单价和每月额度参考。
       「考分」是第三方测评机构 Artificial Analysis 的统考成绩（满分约 100，越高越聪明）。
