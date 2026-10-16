@@ -96,14 +96,18 @@ ICON_PNG = os.path.join(RES_DIR, "icon.png")
 
 UPSTREAM_HOST = "opencode.ai"
 UPSTREAM_PREFIX = "/inference/go"
+# 官方直连地址：就是本程序平时"转发过去"的那个目标。
+# 为啥也要摆出来？因为有时候 Trae 自己就能连上官方（不用中转也通），
+# 这时候直接把官方地址填进去更省事，还少绕一道弯。
+OFFICIAL_BASE = f"https://{UPSTREAM_HOST}{UPSTREAM_PREFIX}"
 BRIDGE_ID = "opencode2trae"
 BRIDGE_VERSION = "2.1"
 SITE_URL = "https://opencode.ai"           # 官网
 CONSOLE_URL = "https://opencode.ai/console/account"   # API 密钥管理 / 账号页面
 USAGE_URL = "https://opencode.ai/console"           # 用量监控页面
 PROJECT_URL = "https://hzdavy.github.io/OpenCode2Trae/"   # 本项目的官网（GitHub Pages）
-# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.10，这里就写 2.1.10）
-APP_VERSION = "2.1.10"
+# 本程序自己的版本号：跟 GitHub 上发布的标签一一对应（发布的标签是 v2.1.11，这里就写 2.1.11）
+APP_VERSION = "2.1.11"
 # "检查更新"去问 GitHub 要最新的发布信息（免登录的公开接口）
 UPDATE_API = "https://api.github.com/repos/HZDavy/OpenCode2Trae/releases/latest"
 RELEASES_URL = "https://github.com/HZDavy/OpenCode2Trae/releases"
@@ -764,6 +768,13 @@ class BridgeApp:
         self.addr_openai_full = tk.StringVar()
         self.addr_claude_base = tk.StringVar()
         self.addr_claude_full = tk.StringVar()
+        # 官方直连地址：固定不变，不跟着本机端口走，所以直接把值填好
+        self.addr_off_openai_base = tk.StringVar(value=OFFICIAL_BASE + "/openai/v1")
+        self.addr_off_openai_full = tk.StringVar(
+            value=OFFICIAL_BASE + "/openai/v1/chat/completions")
+        self.addr_off_claude_base = tk.StringVar(value=OFFICIAL_BASE + "/anthropic/v1")
+        self.addr_off_claude_full = tk.StringVar(
+            value=OFFICIAL_BASE + "/anthropic/v1/messages")
         self.search_var = tk.StringVar()
         self.sort_var = tk.StringVar()
 
@@ -1075,10 +1086,23 @@ class BridgeApp:
                   text="在 Trae 里「API 格式」选 Anthropic Messages 格式，地址同上填法。"
                   ).pack(anchor="w", pady=(6, 0))
 
-    def _addr_row(self, parent, title, var):
+        off = ttk.Labelframe(
+            tab, text=" ③ 官方直连地址（不经过本机中转；偶尔直接就能用） ", padding=10)
+        off.pack(fill="x", pady=(10, 0))
+        self._addr_row(off, "OpenAI 基础", self.addr_off_openai_base, width=12)
+        self._addr_row(off, "OpenAI 完整", self.addr_off_openai_full, width=12)
+        self._addr_row(off, "Claude 基础", self.addr_off_claude_base, width=12)
+        self._addr_row(off, "Claude 完整", self.addr_off_claude_full, width=12)
+        ttk.Label(off, style="Hint.TLabel",
+                  text="上面几条是「绕过本机、直接连 OpenCode」的地址。\n"
+                       "平时用①②就够（本机会帮你补上那张通行证）；万一本程序中转不通、\n"
+                       "而 Trae 自己恰好能连上官方，就把这里的地址填进去试试。"
+                  ).pack(anchor="w", pady=(6, 0))
+
+    def _addr_row(self, parent, title, var, width=8):
         f = ttk.Frame(parent)
         f.pack(fill="x", pady=2)
-        ttk.Label(f, text=title, width=8).pack(side="left")
+        ttk.Label(f, text=title, width=width).pack(side="left")
         e = ttk.Entry(f, textvariable=var, state="readonly")
         e.pack(side="left", fill="x", expand=True, padx=(4, 6))
         ttk.Button(f, text="复制", width=6,
@@ -2127,6 +2151,8 @@ HELP_TEXT = """OpenCode2Trae 是一个"中转站"程序，专门解决 Trae 连 
          想用 Claude → 选 Anthropic Messages 格式
     5. 「自定义请求地址」填「接入地址」页里对应的那条；关掉「完整 URL」开关时填基础地址，
        打开时填完整地址。
+       （该页 ①② 是走本机中转的地址；③ 是官方直连地址 —— 偶尔 Trae 自己就能直连官方，
+        那种情况下直接填 ③ 的地址也行，能少绕一道弯。）
     6. 「模型 ID」到「模型清单」页复制（双击行 = 复制 ID）；「API 密钥」填你自己的密钥。
 
 顺手的几个小功能
